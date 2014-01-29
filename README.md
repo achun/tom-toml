@@ -6,7 +6,7 @@ tom-toml
 This library supports TOML version
 [v0.2.0](https://github.com/mojombo/toml/blob/master/versions/toml-v0.2.0.md)
 
-[![Build Status](https://api.travis-ci.org/achun/tom-toml.png?branch=master)](https://travis-ci.org/achun/tom-toml)
+[![Build Status](https://drone.io/github.com/achun/tom-toml/status.png)](https://drone.io/github.com/achun/tom-toml/latest)
 
 ## Import
 
