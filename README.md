@@ -8,6 +8,10 @@ This library supports TOML version
 
 [![Build Status](https://drone.io/github.com/achun/tom-toml/status.png)](https://drone.io/github.com/achun/tom-toml/latest)
 
+## Different
+
+Datetime is UTC time instead of local time.
+
 ## Import
 
     import "github.com/achun/tom-toml"
@@ -22,7 +26,7 @@ ip = "10.0.0.1" # IP
 dc = "eqdc10"
 ```
 
-Read the username and password like this:
+Read the ip and dc like this:
 
 ```go
 import (
@@ -50,7 +54,7 @@ eqdc10
 ## Documentation
 
 The documentation is available at
-[godoc.org](http://godoc.org/github.com/achun/tom-toml).
+[gowalker.org](http://gowalker.org/github.com/achun/tom-toml).
 
 ## Contribute
 

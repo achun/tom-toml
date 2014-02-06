@@ -7,8 +7,11 @@ import (
 	"strings"
 )
 
+// Toml 是一个 maps, 不是 tree 实现.
 type Toml map[string]*Item
 
+// String returns TOML layout string
+// 格式化输出带缩进的 TOML 格式.
 func (p Toml) String() (fmt string) {
 	l := len(p)
 	if l == 0 {
@@ -17,8 +20,12 @@ func (p Toml) String() (fmt string) {
 	var keys, values []string
 	var keyidx, tabidx []int
 	tables := map[int]string{}
-
+	lastcomments := ""
 	for key, it := range p {
+		if len(key) == 0 {
+			lastcomments = FixComments(it.MultiComments)
+			continue
+		}
 		if it == nil || !it.IsValid() {
 			continue
 		}
@@ -90,7 +97,51 @@ func (p Toml) String() (fmt string) {
 			fmt += p[vk].string(1, count+1)
 		}
 	}
+	if len(lastcomments) != 0 {
+		fmt += "\n" + lastcomments
+	}
 	return
+}
+
+// Fetch returns subset of p, and reset name. not clone.
+// such as:
+//	p.Fetch("")        // returns all valid elements in p
+//	p.Fetch("prefix")
+// 从 Toml 中提取出 prefix 开头的所有 Table 元素, 返回值也是一个 Toml.
+// 注意返回值是原 Toml 的子集, 没有进行克隆.
+func (p Toml) Fetch(prefix string) Toml {
+	nt := Toml{}
+	ln := len(prefix)
+	if ln != 0 {
+		if prefix[ln-1] != '.' {
+			prefix += "."
+			ln++
+		}
+	}
+
+	for key, it := range p {
+		if it == nil || !it.IsValid() || strings.Index(key, prefix) != 0 {
+			continue
+		}
+		newkey := key[ln:]
+		if newkey == "" {
+			continue
+		}
+		nt[newkey] = it
+	}
+	return nt
+}
+
+// TablesName returns all name of Table/ArrayOfTables
+// 返回 Toml 包含的所有 Table/ArrayOfTables的名称.
+func (p Toml) TablesName() []string {
+	var re []string
+	for key, it := range p {
+		if it != nil && it.IsValid() && (it.kind == Table || it.kind == ArrayOfTables) {
+			re = append(re, key)
+		}
+	}
+	return re
 }
 
 func (p Toml) newItem(k Kind) *Item {
@@ -102,6 +153,7 @@ var (
 	Redeclared    = errors.New("duplicate definitionin TOML")
 )
 
+// 从 TOML 格式 source 解析出 Toml 对象.
 func Parse(source []byte) (tm Toml, err error) {
 	var (
 		it, iv        *Item
@@ -138,8 +190,25 @@ func Parse(source []byte) (tm Toml, err error) {
 				it.EolComment = s
 				break
 			}
-			// plain value or [1,2] # comment
-			if iv.kind < StringArray || flag == tokenArrayRightBrack {
+			// plain value or
+			/*
+				[ # comment
+				1,
+				2,
+				] # comment
+			*/
+			if iv.kind < StringArray || flag == tokenArrayLeftBrack {
+				iv.EolComment = s
+				break
+			}
+			if flag == tokenArrayRightBrack {
+				if it.kind == ArrayOfTables {
+					ts := it.Tables(-1)
+					if ts != nil && ts[key] != nil {
+						ts[key].EolComment = s
+					}
+					break
+				}
 				iv.EolComment = s
 				break
 			}
@@ -155,7 +224,7 @@ func Parse(source []byte) (tm Toml, err error) {
 					break
 				}
 			}
-
+			println(flag.String())
 			err = InternalError
 
 		case tokenString, tokenInteger, tokenFloat, tokenBoolean, tokenDatetime:
@@ -289,7 +358,7 @@ func Parse(source []byte) (tm Toml, err error) {
 					err = InternalError
 					break
 				}
-				nit := ts[s]
+				nit := ts[key]
 				if nit == &iv.Value {
 					break
 				}
@@ -325,10 +394,17 @@ func Parse(source []byte) (tm Toml, err error) {
 	for r != nil {
 		r = r(p)
 	}
+	// last comments
+	if fc != "" {
+		it = tm.newItem(0)
+		it.MultiComments = fc
+		tm[""] = it
+	}
 	return
 }
 
 // Create a Toml from a file.
+// 便捷方法, 从 TOML 文件解析出 Toml 对象.
 func LoadFile(path string) (toml Toml, err error) {
 	source, err := ioutil.ReadFile(path)
 	if err != nil {

@@ -32,12 +32,18 @@ func TestToml(t *testing.T) {
 }
 func testToml(t *testing.T, source string, as []string) Toml {
 	tm := assertToml(t, source, as)
-	ia := &tm["multiline.ia"].Value
-	assertFalse(t, ia != nil, "multiline.ia.Value invalid")
+	ia := tm[""]
+	assertFalse(t, ia != nil, "LastComments invalid")
+	assertEqual(t, ia.MultiComments, "# LastComments", "LastComments")
 
+	ia = tm["multiline.ia"]
+	assertFalse(t, ia != nil, "multiline.ia.Value invalid")
+	assertEqual(t, ia.EolComment, "# 10.2", "multiline.ia.EolComment")
+
+	assertEqual(t, ia.Index(0).MultiComments, "# 10.1", "multiline.ia·Index[0].MultiComments")
 	assertEqual(t, ia.Index(1).EolComment, "# 10", "multiline.ia·Index[1].EolComment")
 
-	ia = &tm["arrayarray.2.ia"].Value
+	ia = tm["arrayarray.2.ia"]
 	assertFalse(t, ia != nil, "arrayarray.2.ia invalid")
 
 	assertEqual(t, ia.Index(0).String(), "[1,2]", "arrayarray.2.ia·Index(0)")
@@ -179,11 +185,12 @@ var testData = []string{
 			ba=[true,false]
 		
 		[multiline]
-			ia= [
+			ia= [ # 10.2
+			# 10.1
 			1,
 				2, # 10
 			3,
-			]
+			] # 10.2
 		[arrayarray]
 			ia=[[1,2]]
 		[arrayarray.2]
@@ -197,7 +204,7 @@ var testData = []string{
 		[[array.tables]]
 			ia=2
 			aa="jack"
-	`,
+	# LastComments`,
 	"key", "fc", "# comment 0\n# comment 00",
 	"key", "ts", "\n# comment 0\n# comment 00\nkey = \"first key\"",
 
@@ -221,9 +228,11 @@ var testData = []string{
 
 	"table2.ba", "s", "[true,false]",
 
-	"multiline.ia", "s", "[1,2, # 10\n3]",
+	"multiline.ia", "s", "[1,2,3]",
+	"multiline.ia", "ts", "\nia = [\n\t# 10.1\n\t1,2, # 10\n\t3] # 10.2",
 
 	"arrayarray.ia", "s", "[[1,2]]",
-	"arrayarray.2.ia", "s", "[[1,2], # 11\n[true]]",
+	"arrayarray.2.ia", "s", "[[1,2],[true]]",
+	"arrayarray.2.ia", "ts", "\nia = [[1,2], # 11\n\t[true]]",
 	"array.tables", "s", "1", "ia",
 }

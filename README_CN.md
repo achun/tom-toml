@@ -1,4 +1,5 @@
-# tom-toml
+tom-toml
+========
 
 [TOML](https://github.com/mojombo/toml) 格式 Go 语言支持包.
 
@@ -7,7 +8,11 @@
 
 [![Build Status](https://drone.io/github.com/achun/tom-toml/status.png)](https://drone.io/github.com/achun/tom-toml/latest)
 
-这里有一篇关于 [TOML, 新的简洁配置语言](http://hit9.org/post/toml.html) 中文简介.
+[readme.toml](readme.toml) 是用 toml 格式对 tom-toml 的深入介绍.
+
+## 不同
+
+tom-toml 把 Datetime 当作 UTC 时间而不是 ISO 8601 的本地时间.
 
 ## Import
 
@@ -32,7 +37,7 @@ name = "om Preston-Werner" # 这是行尾注释, tom-toml 把这一行注释绑�
 # 下面列举 TOML 所支持的类型与格式要求
 organization = "GitHub" # 字符串
 bio = "GitHub Cofounder & CEO\nLikes tater tots and beer." # 字符串可以包含转义字符
-dob = 1979-05-27T07:32:00Z # 日期, 必须使用 RFC3339 格式. 对 Go 来说这很简单.
+dob = 1979-05-27T07:32:00Z # 日期, 使用 RFC3339 UTC时间格式(时区为 +00:00). 对 Go 来这更方便. 注意这与 TOML 定义不兼容
 
 [database]
 server = "192.168.1.1"
@@ -56,7 +61,7 @@ data = [ ["gamma", "delta"], [1, 2] ] # 又一个数组
 donate = 49.90 # 浮点, tom-toml 使用 float64 类型
 ```
 
-读取 `servers.alpha` 部分好像这样:
+读取 `servers.alpha` 中的 ip 和 dc:
 
 ```go
 import (
