@@ -8,10 +8,6 @@ This library supports TOML version
 
 [![Build Status](https://drone.io/github.com/achun/tom-toml/status.png)](https://drone.io/github.com/achun/tom-toml/latest)
 
-## Different
-
-Datetime is UTC time instead of local time.
-
 ## Import
 
     import "github.com/achun/tom-toml"

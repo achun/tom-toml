@@ -10,10 +10,6 @@ tom-toml
 
 [readme.toml](readme.toml) 是用 toml 格式对 tom-toml 的深入介绍.
 
-## 不同
-
-tom-toml 把 Datetime 当作 UTC 时间而不是 ISO 8601 的本地时间.
-
 ## Import
 
     import "github.com/achun/tom-toml"
@@ -37,7 +33,7 @@ name = "om Preston-Werner" # 这是行尾注释, tom-toml 把这一行注释绑�
 # 下面列举 TOML 所支持的类型与格式要求
 organization = "GitHub" # 字符串
 bio = "GitHub Cofounder & CEO\nLikes tater tots and beer." # 字符串可以包含转义字符
-dob = 1979-05-27T07:32:00Z # 日期, 使用 RFC3339 UTC时间格式(时区为 +00:00). 对 Go 来这更方便. 注意这与 TOML 定义不兼容
+dob = 1979-05-27T07:32:00Z # 日期, 使用 ISO 8601 Zulu 时区(最后的 Z 表示时区为 +00:00). 对 Go 来说兼容 RFC3339 layout.
 
 [database]
 server = "192.168.1.1"
