@@ -6,7 +6,7 @@ tom-toml
 This library supports TOML version
 [v0.2.0](https://github.com/mojombo/toml/blob/master/versions/toml-v0.2.0.md)
 
-[![Build Status](https://drone.io/github.com/achun/tom-toml/status.png)](https://drone.io/github.com/achun/tom-toml/latest)
+[![wercker status](https://app.wercker.com/status/28e2ac15ba6930f928b10187ad4043c3 "wercker status")](https://app.wercker.com/project/bykey/28e2ac15ba6930f928b10187ad4043c3)
 
 ## Import
 
