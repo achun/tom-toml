@@ -3,6 +3,7 @@ package toml
 import (
 	"errors"
 	"io/ioutil"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -26,7 +27,7 @@ func (p Toml) String() (fmt string) {
 			lastcomments = FixComments(it.MultiComments)
 			continue
 		}
-		if it == nil || !it.IsValid() {
+		if !it.IsValid() {
 			continue
 		}
 		pos := strings.LastIndex(key, ".")
@@ -137,11 +138,121 @@ func (p Toml) Fetch(prefix string) Toml {
 func (p Toml) TablesName() []string {
 	var re []string
 	for key, it := range p {
-		if it != nil && it.IsValid() && (it.kind == Table || it.kind == ArrayOfTables) {
+		if it.IsValid() && (it.kind == Table || it.kind == ArrayOfTables) {
 			re = append(re, key)
 		}
 	}
 	return re
+}
+
+// Apply to each field in the struct, case sensitive.
+func (p Toml) Apply(val interface{}, foo ...interface{}) (count int) {
+	var (
+		vv  reflect.Value
+		ok  bool
+		key string
+		it  *Item
+	)
+
+	if len(foo) != 0 {
+		key, ok = foo[0].(string)
+		if ok {
+			it = p[key]
+		} else {
+			it, ok = foo[0].(*Item)
+		}
+		if !it.IsValid() {
+			return
+		}
+	}
+
+	vv, ok = val.(reflect.Value)
+	if ok {
+		vv = reflect.Indirect(vv)
+	} else {
+		vv = reflect.Indirect(reflect.ValueOf(val))
+	}
+
+	if !vv.IsValid() || !vv.CanSet() ||
+		len(key) == 0 &&
+			!it.IsValid() &&
+			vv.Kind() != reflect.Struct && vv.Kind() != reflect.Map {
+		return
+	}
+
+	vt := vv.Type()
+
+	switch vt.Kind() {
+	case reflect.Bool:
+		if it.kind == Boolean {
+			vv.SetBool(it.Boolean())
+			count++
+		}
+	case reflect.String:
+		if it.kind >= String && it.kind < StringArray {
+			vv.SetString(it.String())
+			count++
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if it.kind == Integer {
+			vv.SetInt(it.Int())
+			count++
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if it.kind == Integer {
+			vv.SetUint(it.UInt())
+			count++
+		}
+	case reflect.Float32, reflect.Float64:
+		if it.kind == Float {
+			vv.SetFloat(it.Float())
+			count++
+		}
+	case reflect.Interface:
+		if vt.String() == "interface {}" && it.IsValid() {
+			vv.Set(reflect.ValueOf(it.v))
+			count++
+		}
+	case reflect.Struct:
+		if it.IsValid() && it.kind == Datetime && vt.String() == "time.Time" {
+			vv.Set(reflect.ValueOf(it.Datetime()))
+			count++
+			break
+		}
+		if len(key) != 0 {
+			p = p.Fetch(key)
+		}
+		for i := 0; i < vv.NumField(); i++ {
+			count += p.Apply(vv.Field(i), vt.Field(i).Name)
+		}
+	case reflect.Array, reflect.Slice:
+		l := it.Len()
+		if l == -1 {
+			break
+		}
+		if vt.Kind() == reflect.Slice && vv.Len() < l {
+			if vv.Cap() < l {
+				l = vv.Cap()
+			}
+			vv.SetLen(l)
+		}
+		vl := vv.Len()
+		for i := 0; i < l && i < vl; i++ {
+			count += p.Apply(vv.Index(i), &Item{*it.Index(i)})
+		}
+	case reflect.Map:
+		break // not support
+		if vt.Key().Kind() != reflect.String {
+			break
+		}
+		keys := vv.MapKeys()
+		for i := 0; i < len(keys); i++ {
+			count += p.Apply(vv.MapIndex(keys[i]), keys[i].String())
+		}
+	default:
+		println(vt.String())
+	}
+	return
 }
 
 func (p Toml) newItem(k Kind) *Item {

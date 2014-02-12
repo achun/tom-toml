@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestTomlFile(t *testing.T) {
@@ -115,20 +116,19 @@ func assertToml(t *testing.T, source string, as []string) (tm Toml) {
 		fn := as[i+1]
 		re := as[i+2]
 		it := tm[path]
-		if it.kind == ArrayOfTables {
+
+		if it != nil && it.kind == ArrayOfTables {
 			ts := it.Tables(0)
 			if ts == nil {
 				t.Fatal(path, it)
-				break
 			}
 
 			it = &Item{*ts[as[i+3]]}
 			i++
 		}
 		s := ""
-		if it == nil {
-			t.Fatal(path, it)
-			break
+		if !it.IsValid() {
+			t.Fatalf("\n%v %v :\n%#v\n%#v\n", path, fn, re, it)
 		}
 		switch fn {
 		case "fc":
@@ -235,4 +235,48 @@ var testData = []string{
 	"arrayarray.2.ia", "s", "[[1,2],[true]]",
 	"arrayarray.2.ia", "ts", "\nia = [[1,2], # 11\n\t[true]]",
 	"array.tables", "s", "1", "ia",
+}
+
+var testDat = `
+	Key = "string"
+	Int = 123456
+	Time = 2014-01-02T15:04:05Z
+	[Table]
+		IntArray = [1,2,3]
+	`
+
+type testStruct struct {
+	Key   string
+	Int   int
+	Time  time.Time
+	Table testTable
+}
+type testTable struct {
+	IntArray []int
+}
+
+func TestToml_Apply(t *testing.T) {
+	tm, err := Parse([]byte(testDat))
+	assertError(t, err)
+	v := testStruct{
+		"", 0, time.Time{},
+		testTable{[]int{0, 0, 0}},
+	}
+	assertEqual(t, tm.Apply(&v), 6)
+	assertEqual(t, v.Key, "string")
+	assertEqual(t, v.Int, 123456)
+	assertEqual(t, v.Time.String(), "2014-01-02 15:04:05 +0000 UTC")
+	//assertFalse(t, v.Table != nil)
+	assertEqual(t, len(v.Table.IntArray), 3)
+	assertEqual(t, v.Table.IntArray[0], 1)
+	assertEqual(t, v.Table.IntArray[1], 2)
+	assertEqual(t, v.Table.IntArray[2], 3)
+
+	m := map[string]interface{}{
+		"Key":   "",
+		"Int":   0,
+		"Time":  time.Time{},
+		"Table": &testTable{},
+	}
+	assertEqual(t, tm.Apply(m), 0)
 }

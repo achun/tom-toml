@@ -27,6 +27,7 @@ const (
 	BooleanArray
 	DatetimeArray
 	Array
+	// 下列规格 Kind 不存储具体值数据, 只存储规格本身信息.
 	Table
 	ArrayOfTables
 )
@@ -91,8 +92,7 @@ func NewItem(kind Kind) *Item {
 	return it
 }
 
-// Value 用来存储除了 ArrayOfTables 规格的数据.
-// Table 规格本身也当成一个数据保存, 具体影响见 Toml 的结构.
+// Value 用来存储 String 至 Table 规格.
 type Value struct {
 	kind          Kind
 	v             interface{}
@@ -120,21 +120,28 @@ func NewValue(kind Kind) *Value {
 }
 
 // Kind 返回数据的风格.
-// 注意 Table 只是一个规格标记, 并不保存真正的值.
 func (p *Value) Kind() Kind {
+	if !p.IsValid() {
+		return InvalidKind
+	}
 	return p.kind
 }
 
-// IsValid 返回 *Value 是否是一个有效的规格.
+// IsValid 返回 p 是否有效.
 func (p *Value) IsValid() bool {
 	return p != nil && p.kind != InvalidKind && (p.v != nil || p.kind == Table)
 }
 
-func (p *Value) canNotSet(k Kind) bool {
-	return p.kind != InvalidKind && p.kind != k
+// IsValue 返回 p 是否存储了值数据
+func (p *Value) IsValue() bool {
+	return p != nil && p.kind != InvalidKind && p.v != nil && p.kind < Table
 }
 
-// Set 用来设置 *Value 要保存的具体值. 参数 x 的类型范围可以是
+func (p *Value) canNotSet(k Kind) bool {
+	return p == nil || p.kind != InvalidKind && p.kind != k
+}
+
+// Set 用来设置 *Value 要存储的具体值. 参数 x 的类型范围可以是
 // String,Integer,Float,Boolean,Datetime 之一
 // 如果 *Value 的 Kind 是 InvalidKind(也就是没有明确值类型),
 // 调用 Set 后, *Value 的 kind 会相应的更改, 否则要求 x 的类型必须符合 *Value 的 kind
@@ -346,7 +353,7 @@ func (p *Value) Add(ai ...interface{}) error {
 	return nil
 }
 
-// String 返回 *Value 保存数据的字符串表示.
+// String 返回 *Value 存储数据的字符串表示.
 // 注意所有的规格定义都是可以字符串化的.
 func (p *Value) String() string {
 	return p.string(0, 0)
@@ -403,6 +410,102 @@ func (p *Value) Datetime() time.Time {
 	return p.v.(time.Time)
 }
 
+func (p *Value) StringArray() []string {
+	a, ok := p.v.([]*Value)
+	if !ok || p.kind != StringArray {
+		return nil
+	}
+	re := make([]string, len(a))
+	for i, v := range a {
+		re[i] = v.String()
+	}
+	return re
+}
+
+func (p *Value) IntArray() []int64 {
+	a, ok := p.v.([]*Value)
+	if !ok || p.kind != IntegerArray {
+		return nil
+	}
+	re := make([]int64, len(a))
+	for i, v := range a {
+		re[i] = v.Int()
+	}
+	return re
+}
+
+func (p *Value) UIntArray() []uint64 {
+	a, ok := p.v.([]*Value)
+	if !ok || p.kind != IntegerArray {
+		return nil
+	}
+	re := make([]uint64, len(a))
+	for i, v := range a {
+		re[i] = v.UInt()
+	}
+	return re
+}
+
+func (p *Value) IntegerArray() []int {
+	a, ok := p.v.([]*Value)
+	if !ok || p.kind != IntegerArray {
+		return nil
+	}
+	re := make([]int, len(a))
+	for i, v := range a {
+		re[i] = int(v.Int())
+	}
+	return re
+}
+
+func (p *Value) UIntegerArray() []uint {
+	a, ok := p.v.([]*Value)
+	if !ok || p.kind != IntegerArray {
+		return nil
+	}
+	re := make([]uint, len(a))
+	for i, v := range a {
+		re[i] = uint(v.UInt())
+	}
+	return re
+}
+
+func (p *Value) FloatArray() []float64 {
+	a, ok := p.v.([]*Value)
+	if !ok || p.kind != FloatArray {
+		return nil
+	}
+	re := make([]float64, len(a))
+	for i, v := range a {
+		re[i] = v.Float()
+	}
+	return re
+}
+
+func (p *Value) BooleanArray() []bool {
+	a, ok := p.v.([]*Value)
+	if !ok || p.kind != BooleanArray {
+		return nil
+	}
+	re := make([]bool, len(a))
+	for i, v := range a {
+		re[i] = v.Boolean()
+	}
+	return re
+}
+
+func (p *Value) DatetimeArray() []time.Time {
+	a, ok := p.v.([]*Value)
+	if !ok || p.kind != DatetimeArray {
+		return nil
+	}
+	re := make([]time.Time, len(a))
+	for i, v := range a {
+		re[i] = v.Datetime()
+	}
+	return re
+}
+
 // Len returns length for Array , typeArray.
 // Otherwise Kind return -1.
 // Len 返回数组类型元素个数.
@@ -440,7 +543,7 @@ func (p *Value) Index(idx int) *Value {
 }
 
 // Tables is an map container for Kind() < Table
-// Tables 是一个 maps 容器, 用来保存 TOML 规格定义中的 key/value.
+// Tables 是一个 maps 容器, 用来存储 TOML 规格定义中的 key/value.
 // Tables 这个名字是 tom-toml 实现需求定义的, 不在 TOML 定义中.
 type Tables map[string]*Value
 
@@ -452,7 +555,7 @@ func (p Tables) String() (fmt string) {
 	var keyidx []int
 	keys := map[int]string{}
 	for key, it := range p {
-		if it != nil && it.IsValid() {
+		if it.IsValid() {
 			if it.kind < Table {
 				keys[it.idx] = key
 				keyidx = append(keyidx, it.idx)
@@ -482,6 +585,11 @@ type Item struct {
 	Value
 }
 
+// IsValid 返回 p 是否有效.
+func (p *Item) IsValid() bool {
+	return p != nil && p.Value.IsValid()
+}
+
 // AddTables 为 ArrayOfTables 增加新的 Tables 元素.
 func (p *Item) AddTables(ts Tables) error {
 	if ts == nil || p.kind != ArrayOfTables && p.kind != InvalidKind {
@@ -501,7 +609,7 @@ func (p *Item) AddTables(ts Tables) error {
 
 // DelTables 为 ArrayOfTables 删除下标为 idx 的元素.
 // 如果 idx 超出下标范围返回 OutOfRange 错误.
-// 如果保存了非法的数据会返回 InternalError 错误.
+// 如果存储了非法的数据会返回 InternalError 错误.
 func (p *Item) DelTables(idx int) error {
 	if p.kind != ArrayOfTables {
 		return NotSupported
@@ -543,10 +651,12 @@ func (p *Item) Tables(idx int) Tables {
 	return aot[idx]
 }
 
-// Len returns length for Array , typeArray , ArrayOfTables.
-// Otherwise Kind return -1.
+// +doclang zh-cn
 // Len 返回数组类型或者ArrayOfTables的元素个数.
 // 否则返回 -1.
+
+// Len returns length for Array , typeArray , ArrayOfTables.
+// Otherwise Kind return -1.
 func (p *Item) Len() int {
 	if p.kind == ArrayOfTables {
 		a, ok := p.v.([]Tables)
@@ -558,7 +668,7 @@ func (p *Item) Len() int {
 	return p.Value.Len()
 }
 
-// String 返回 *Item 保存数据的字符串表示.
+// String 返回 *Item 存储数据的字符串表示.
 // 注意所有的规格定义都是可以字符串化的.
 func (p *Item) String() string {
 	return p.string(0, 0)
@@ -570,8 +680,9 @@ func (p *Item) TomlString() string {
 	return p.string(1, 0)
 }
 
-// FixComments returns comments, newline equal "\n"
 // 对完整注释字符串进行修正, 修正后的多行字符串使用换行符 "\n".
+
+// FixComments returns comments, newline equal "\n"
 func FixComments(str string) string {
 	as := strings.Split(str, "#")
 	re := ""
@@ -589,6 +700,9 @@ func FixComments(str string) string {
 }
 
 func (p *Item) string(layout int, indent int) (fmt string) {
+	if p == nil || !p.IsValid() {
+		return
+	}
 	if p.kind != ArrayOfTables {
 		return p.Value.string(layout, indent)
 	}
