@@ -147,6 +147,9 @@ func (p *Value) canNotSet(k Kind) bool {
 // 调用 Set 后, *Value 的 kind 会相应的更改, 否则要求 x 的类型必须符合 *Value 的 kind
 // Set 失败会返回 NotSupported 错误.
 func (p *Value) Set(x interface{}) error {
+	if p == nil {
+		return NotSupported
+	}
 	switch v := x.(type) {
 	case string:
 		if p.canNotSet(String) {
@@ -298,7 +301,7 @@ func asValue(i interface{}) (v *Value, ok bool) {
 // Add 方法为类型数组或者二维数组添加值对象.
 // 如果 *Value 是 InvalidKind, Add 会根据参数的类型自动设置 kind. 否则要求参数符合 kind.
 func (p *Value) Add(ai ...interface{}) error {
-	if p.kind != InvalidKind && (p.kind < StringArray || p.kind > Array) {
+	if p == nil || p.kind != InvalidKind && (p.kind < StringArray || p.kind > Array) {
 		return NotSupported
 	}
 	if len(ai) == 0 {
@@ -368,7 +371,7 @@ func (p *Value) TomlString() string {
 // 如果值是 Interger 可以使用 Int 返回其 int64 值.
 // 否则返回 0
 func (p *Value) Int() int64 {
-	if p.kind != Integer {
+	if !p.IsValid() || p.kind != Integer {
 		return 0
 	}
 	return p.v.(int64)
@@ -377,7 +380,7 @@ func (p *Value) Int() int64 {
 // 如果值是 Interger 可以使用 UInt 返回其 uint64 值.
 // 否则返回 0
 func (p *Value) UInt() uint64 {
-	if p.kind != Integer {
+	if !p.IsValid() || p.kind != Integer {
 		return 0
 	}
 	return uint64(p.v.(int64))
@@ -386,7 +389,7 @@ func (p *Value) UInt() uint64 {
 // 如果值是 Float 可以使用 Float 返回其 float64 值.
 // 否则返回 0
 func (p *Value) Float() float64 {
-	if p.kind != Float {
+	if !p.IsValid() || p.kind != Float {
 		return 0
 	}
 	return p.v.(float64)
@@ -395,7 +398,7 @@ func (p *Value) Float() float64 {
 // 如果值是 Boolean 可以使用 Boolean 返回其 bool 值.
 // 否则返回 false
 func (p *Value) Boolean() bool {
-	if p.kind != Boolean {
+	if !p.IsValid() || p.kind != Boolean {
 		return false
 	}
 	return p.v.(bool)
@@ -404,13 +407,16 @@ func (p *Value) Boolean() bool {
 // 如果值是 Datetime 可以使用 Datetime 返回其 time.Time 值.
 // 否则返回 UTC 元年1月1日.
 func (p *Value) Datetime() time.Time {
-	if p.kind != Datetime {
+	if !p.IsValid() || p.kind != Datetime {
 		return time.Unix(978307200-63113904000, 0).UTC()
 	}
 	return p.v.(time.Time)
 }
 
 func (p *Value) StringArray() []string {
+	if !p.IsValid() {
+		return nil
+	}
 	a, ok := p.v.([]*Value)
 	if !ok || p.kind != StringArray {
 		return nil
@@ -423,6 +429,9 @@ func (p *Value) StringArray() []string {
 }
 
 func (p *Value) IntArray() []int64 {
+	if !p.IsValid() {
+		return nil
+	}
 	a, ok := p.v.([]*Value)
 	if !ok || p.kind != IntegerArray {
 		return nil
@@ -435,6 +444,9 @@ func (p *Value) IntArray() []int64 {
 }
 
 func (p *Value) UIntArray() []uint64 {
+	if !p.IsValid() {
+		return nil
+	}
 	a, ok := p.v.([]*Value)
 	if !ok || p.kind != IntegerArray {
 		return nil
@@ -447,6 +459,9 @@ func (p *Value) UIntArray() []uint64 {
 }
 
 func (p *Value) IntegerArray() []int {
+	if !p.IsValid() {
+		return nil
+	}
 	a, ok := p.v.([]*Value)
 	if !ok || p.kind != IntegerArray {
 		return nil
@@ -459,6 +474,9 @@ func (p *Value) IntegerArray() []int {
 }
 
 func (p *Value) UIntegerArray() []uint {
+	if !p.IsValid() {
+		return nil
+	}
 	a, ok := p.v.([]*Value)
 	if !ok || p.kind != IntegerArray {
 		return nil
@@ -471,6 +489,9 @@ func (p *Value) UIntegerArray() []uint {
 }
 
 func (p *Value) FloatArray() []float64 {
+	if !p.IsValid() {
+		return nil
+	}
 	a, ok := p.v.([]*Value)
 	if !ok || p.kind != FloatArray {
 		return nil
@@ -483,6 +504,9 @@ func (p *Value) FloatArray() []float64 {
 }
 
 func (p *Value) BooleanArray() []bool {
+	if !p.IsValid() {
+		return nil
+	}
 	a, ok := p.v.([]*Value)
 	if !ok || p.kind != BooleanArray {
 		return nil
@@ -495,6 +519,9 @@ func (p *Value) BooleanArray() []bool {
 }
 
 func (p *Value) DatetimeArray() []time.Time {
+	if !p.IsValid() {
+		return nil
+	}
 	a, ok := p.v.([]*Value)
 	if !ok || p.kind != DatetimeArray {
 		return nil
@@ -511,7 +538,7 @@ func (p *Value) DatetimeArray() []time.Time {
 // Len 返回数组类型元素个数.
 // 否则返回 -1.
 func (p *Value) Len() int {
-	if p.kind >= StringArray && p.kind <= Array {
+	if p.IsValid() && p.kind >= StringArray && p.kind <= Array {
 		a, ok := p.v.([]*Value)
 		if ok {
 			return len(a)
@@ -525,7 +552,7 @@ func (p *Value) Len() int {
 // Index 根据 idx 下标返回类型数组或二维数组对应的元素.
 // 如果非数组或者下标超出范围返回 nil.
 func (p *Value) Index(idx int) *Value {
-	if p.kind < StringArray && p.kind > Array {
+	if !p.IsValid() || p.kind < StringArray && p.kind > Array {
 		return nil
 	}
 	a, ok := p.v.([]*Value)
@@ -585,6 +612,14 @@ type Item struct {
 	Value
 }
 
+// 返回非安全的 *Value, 方便对 nil 对象操作
+func (p *Item) UnSafe() *Value {
+	if p == nil {
+		return nil
+	}
+	return &p.Value
+}
+
 // IsValid 返回 p 是否有效.
 func (p *Item) IsValid() bool {
 	return p != nil && p.Value.IsValid()
@@ -592,7 +627,7 @@ func (p *Item) IsValid() bool {
 
 // AddTables 为 ArrayOfTables 增加新的 Tables 元素.
 func (p *Item) AddTables(ts Tables) error {
-	if ts == nil || p.kind != ArrayOfTables && p.kind != InvalidKind {
+	if p == nil || ts == nil || p.kind != ArrayOfTables && p.kind != InvalidKind {
 		return NotSupported
 	}
 	if p.kind == InvalidKind {
@@ -611,7 +646,7 @@ func (p *Item) AddTables(ts Tables) error {
 // 如果 idx 超出下标范围返回 OutOfRange 错误.
 // 如果存储了非法的数据会返回 InternalError 错误.
 func (p *Item) DelTables(idx int) error {
-	if p.kind != ArrayOfTables {
+	if !p.IsValid() || p.kind != ArrayOfTables {
 		return NotSupported
 	}
 	aot, ok := p.v.([]Tables)
@@ -634,7 +669,7 @@ func (p *Item) DelTables(idx int) error {
 // Tables 为 ArrayOfTables 返回下标为 idx 的 Tables 元素.
 // 非 ArrayOfTables 返回 nil.
 func (p *Item) Tables(idx int) Tables {
-	if p.kind != ArrayOfTables {
+	if !p.IsValid() || p.kind != ArrayOfTables {
 		return nil
 	}
 	aot, ok := p.v.([]Tables)
@@ -658,6 +693,10 @@ func (p *Item) Tables(idx int) Tables {
 // Len returns length for Array , typeArray , ArrayOfTables.
 // Otherwise Kind return -1.
 func (p *Item) Len() int {
+	if !p.IsValid() {
+		return -1
+	}
+
 	if p.kind == ArrayOfTables {
 		a, ok := p.v.([]Tables)
 		if ok {
@@ -671,12 +710,18 @@ func (p *Item) Len() int {
 // String 返回 *Item 存储数据的字符串表示.
 // 注意所有的规格定义都是可以字符串化的.
 func (p *Item) String() string {
+	if !p.IsValid() {
+		return ""
+	}
 	return p.string(0, 0)
 }
 
 // TomlString 返回用于格式化输出的字符串表示.
 // 与 String 不同, 输出包括了注释和缩进.
 func (p *Item) TomlString() string {
+	if !p.IsValid() {
+		return ""
+	}
 	return p.string(1, 0)
 }
 
