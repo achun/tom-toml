@@ -55,32 +55,62 @@ enabled = true # 布尔型
 [clients]
 data = [ ["gamma", "delta"], [1, 2] ] # 又一个数组
 donate = 49.90 # 浮点, tom-toml 使用 float64 类型
+
+# 通过 smtp 发电子邮件所需要的的参数
+[smtpAuth]
+Identity = ""
+Username = "Do_Not_Reply"
+Password = "password"
+Host     = "example.com"
+Subject  = "message"
+To       = ["me@example.com","you@example.com"]
 ```
 
 读取 `servers.alpha` 中的 ip 和 dc:
 
 ```go
+package main
+
 import (
-    "fmt"
-    "github.com/achun/tom-toml"
+	"fmt"
+	"github.com/achun/tom-toml"
 )
+
+type smtpAuth struct {
+	Identity string
+	Username string
+	Password string
+	Host     string
+	Subject  string
+	To       []string
+}
+
 func main() {
-    conf, err := toml.LoadFile("good.toml")
-    if err != nil {
-        fmt.Println(err)
-        return
-    }
-    fmt.Println(conf["servers.alpha.ip"].String())
-    fmt.Println(conf["servers.alpha.dc"].String())
+	conf, err := toml.LoadFile("good.toml")
+
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(conf["servers.alpha.ip"].String())
+	fmt.Println(conf["servers.alpha.dc"].String())
+
+	sa := smtpAuth{}
+	auth := conf.Fetch("smtpAuth") // 严格区分大小写
+
+	sa.To = make([]string, auth["To"].Len())
+	auth.Apply(&sa)
+
+	fmt.Println(sa)
 }
 ```
 
 输出是这样的:
 
-```
-10.0.0.1
-eqdc10
-```
+	10.0.0.1
+	eqdc10
+	{ Do_Not_Reply password example.com message [me@example.com you@example.com]}
 
 您应该注意到了注释的表现形式, tom-toml 提供了注释支持.
 

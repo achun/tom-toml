@@ -2,9 +2,11 @@ package toml
 
 import (
 	"errors"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,8 +29,9 @@ const (
 	BooleanArray
 	DatetimeArray
 	Array
-	// 下列规格 Kind 不存储具体值数据, 只存储规格本身信息.
-	Table
+	// TableName 因为 tom-toml 支持注释的原因, 不存储具体值数据, 只存储规格本身信息.
+	// 又因为 Toml 是个 map, 本身就具有 key/value 的存储功能, 所以无需另外定义 Table
+	TableName
 	ArrayOfTables
 )
 
@@ -49,7 +52,7 @@ var kindsName = [...]string{
 	"BooleanArray",
 	"DatetimeArray",
 	"Array",
-	"Table",
+	"TableName",
 	"ArrayOfTables",
 }
 
@@ -62,11 +65,14 @@ var (
 
 // 计数器为保持格式化输出次序准备.
 var _counter = 0
+var _counterLocker sync.Mutex
 
 func counter(idx int) int {
 	if idx > 0 {
 		return idx
 	}
+	_counterLocker.Lock()
+	defer _counterLocker.Unlock()
 	_counter++
 	return _counter
 }
@@ -76,7 +82,7 @@ func counter(idx int) int {
 // 使用者应该使用该函数来得到新的 *Item. 而不是用 new(Item) 获得.
 // 那样的话就无法保持格式化输出次序.
 func NewItem(kind Kind) *Item {
-	if kind < 0 || kind > ArrayOfTables {
+	if kind > ArrayOfTables {
 		return nil
 	}
 
@@ -86,19 +92,19 @@ func NewItem(kind Kind) *Item {
 	it.idx = counter(0)
 
 	if kind == ArrayOfTables {
-		it.v = []Tables{}
+		it.v = []Table{}
 	}
 
 	return it
 }
 
-// Value 用来存储 String 至 Table 规格.
+// Value 用来存储 String 至 Array 的值.
 type Value struct {
 	kind          Kind
 	v             interface{}
 	MultiComments string // Multi-line comments
 	EolComment    string // end of line comment
-	key           string // for TOML formatter
+	key           string // cached key name for TOML formatter
 	idx           int
 }
 
@@ -107,7 +113,7 @@ type Value struct {
 // 使用者应该使用该函数来得到新的 *Value. 而不是用 new(Value) 获得.
 // 那样的话就无法保持格式化输出次序.
 func NewValue(kind Kind) *Value {
-	if kind < 0 || kind > Table {
+	if kind > TableName {
 		return nil
 	}
 
@@ -127,14 +133,21 @@ func (p *Value) Kind() Kind {
 	return p.kind
 }
 
+func (p *Value) KindIs(kind Kind) bool {
+	if p == nil {
+		return false
+	}
+	return p.kind == kind
+}
+
 // IsValid 返回 p 是否有效.
 func (p *Value) IsValid() bool {
-	return p != nil && p.kind != InvalidKind && (p.v != nil || p.kind == Table)
+	return p != nil && p.kind != InvalidKind && (p.v != nil || p.kind == TableName)
 }
 
 // IsValue 返回 p 是否存储了值数据
 func (p *Value) IsValue() bool {
-	return p != nil && p.kind != InvalidKind && p.v != nil && p.kind < Table
+	return p != nil && p.kind != InvalidKind && p.v != nil && p.kind < TableName
 }
 
 func (p *Value) canNotSet(k Kind) bool {
@@ -569,13 +582,17 @@ func (p *Value) Index(idx int) *Value {
 	return a[idx]
 }
 
-// Tables is an map container for Kind() < Table
-// Tables 是一个 maps 容器, 用来存储 TOML 规格定义中的 key/value.
-// Tables 这个名字是 tom-toml 实现需求定义的, 不在 TOML 定义中.
-type Tables map[string]*Value
+// Table are map container, Table are collections of key/value pairs.
 
-// String 返回 Tables 的 TOML 格式化字符串
-func (p Tables) String() (fmt string) {
+/**
+Table 是个 map 容器, 用来存储 TOML 规格定义中 Table 存储的 key/value 部分.
+注意:
+	因为注释的原因, TOML 中定义的 Table 在 tom-toml 中分成了 TableName 和 Table.
+*/
+type Table map[string]*Value
+
+// String 返回 Table 的 TOML 格式化字符串
+func (p Table) String() (pretty string) {
 	if len(p) == 0 {
 		return
 	}
@@ -583,7 +600,7 @@ func (p Tables) String() (fmt string) {
 	keys := map[int]string{}
 	for key, it := range p {
 		if it.IsValid() {
-			if it.kind < Table {
+			if it.kind < TableName {
 				keys[it.idx] = key
 				keyidx = append(keyidx, it.idx)
 			} else {
@@ -602,12 +619,12 @@ func (p Tables) String() (fmt string) {
 			continue
 		}
 		it.key = key
-		fmt += it.string(1, 1)
+		pretty += it.string(1, 1)
 	}
 	return
 }
 
-// Item 扩展自 Value, 支持 ArrayOfTables.
+// Item 扩展自 Value, 支持 TableName 和 ArrayOfTables.
 type Item struct {
 	Value
 }
@@ -625,16 +642,16 @@ func (p *Item) IsValid() bool {
 	return p != nil && p.Value.IsValid()
 }
 
-// AddTables 为 ArrayOfTables 增加新的 Tables 元素.
-func (p *Item) AddTables(ts Tables) error {
+// AddTable 为 ArrayOfTables 增加新的 Table.
+func (p *Item) AddTable(ts Table) error {
 	if p == nil || ts == nil || p.kind != ArrayOfTables && p.kind != InvalidKind {
 		return NotSupported
 	}
 	if p.kind == InvalidKind {
-		p.v = []Tables{}
+		p.v = []Table{}
 		p.kind = ArrayOfTables
 	}
-	aot, ok := p.v.([]Tables)
+	aot, ok := p.v.([]Table)
 	if !ok {
 		return InternalError
 	}
@@ -642,14 +659,14 @@ func (p *Item) AddTables(ts Tables) error {
 	return nil
 }
 
-// DelTables 为 ArrayOfTables 删除下标为 idx 的元素.
+// DelTable 为 ArrayOfTables 删除下标为 idx 的元素.
 // 如果 idx 超出下标范围返回 OutOfRange 错误.
 // 如果存储了非法的数据会返回 InternalError 错误.
-func (p *Item) DelTables(idx int) error {
+func (p *Item) DelTable(idx int) error {
 	if !p.IsValid() || p.kind != ArrayOfTables {
 		return NotSupported
 	}
-	aot, ok := p.v.([]Tables)
+	aot, ok := p.v.([]Table)
 	if !ok {
 		return InternalError
 	}
@@ -664,15 +681,17 @@ func (p *Item) DelTables(idx int) error {
 	return nil
 }
 
-// Index returns Tables for ArrayOfTables.
+// Index returns Table for ArrayOfTables.
 // Otherwise Kind return nil.
-// Tables 为 ArrayOfTables 返回下标为 idx 的 Tables 元素.
-// 非 ArrayOfTables 返回 nil.
-func (p *Item) Tables(idx int) Tables {
+/**
+Table 返回 ArrayOfTables 下标为 idx 的 Table.
+非 ArrayOfTables 返回 nil.
+*/
+func (p *Item) Table(idx int) Table {
 	if !p.IsValid() || p.kind != ArrayOfTables {
 		return nil
 	}
-	aot, ok := p.v.([]Tables)
+	aot, ok := p.v.([]Table)
 	if !ok {
 		return nil
 	}
@@ -687,7 +706,7 @@ func (p *Item) Tables(idx int) Tables {
 }
 
 // +doclang zh-cn
-// Len 返回数组类型或者ArrayOfTables的元素个数.
+// Len 返回数组类型的元素个数.
 // 否则返回 -1.
 
 // Len returns length for Array , typeArray , ArrayOfTables.
@@ -698,7 +717,7 @@ func (p *Item) Len() int {
 	}
 
 	if p.kind == ArrayOfTables {
-		a, ok := p.v.([]Tables)
+		a, ok := p.v.([]Table)
 		if ok {
 			return len(a)
 		}
@@ -744,8 +763,8 @@ func FixComments(str string) string {
 	return re
 }
 
-func (p *Item) string(layout int, indent int) (fmt string) {
-	if p == nil || !p.IsValid() {
+func (p *Item) string(layout int, indent int) (pretty string) {
+	if !p.IsValid() {
 		return
 	}
 	if p.kind != ArrayOfTables {
@@ -753,12 +772,12 @@ func (p *Item) string(layout int, indent int) (fmt string) {
 	}
 	p.MultiComments = FixComments(p.MultiComments)
 	p.EolComment = FixComments(p.EolComment)
-	fmt = p.MultiComments
+	pretty = p.MultiComments
 	// Item is comment?
-	if p.v == nil && p.kind < Table {
+	if p.v == nil && p.kind < TableName {
 		return
 	}
-	aot, ok := p.v.([]Tables)
+	aot, ok := p.v.([]Table)
 	if !ok {
 		panic(InternalError)
 	}
@@ -772,14 +791,14 @@ func (p *Item) string(layout int, indent int) (fmt string) {
 
 		if i == 0 {
 			if layout == 0 {
-				fmt += tn
+				pretty += tn
 			} else {
-				fmt += p.Value.comments(tn, layout, indent)
+				pretty += p.Value.comments(tn, layout, indent)
 			}
 		} else {
-			fmt += "\n" + tn
+			pretty += "\n" + tn
 		}
-		fmt += ts.String()
+		pretty += ts.String()
 	}
 	return
 }
@@ -812,7 +831,7 @@ func (p *Value) string(layout int, indent int) string {
 		return p.typeArrayString(layout, indent)
 	case Array:
 		return p.typeArrayString(layout, indent)
-	case Table:
+	case TableName:
 		indents := ""
 		if indent > 0 {
 			indents = strings.Repeat("\t", indent)
@@ -837,7 +856,7 @@ func (p *Value) comments(v string, layout int, indent int) string {
 	p.MultiComments = FixComments(p.MultiComments)
 	p.EolComment = FixComments(p.EolComment)
 	if ts && len(key) != 0 {
-		if p.kind < Table {
+		if p.kind < TableName {
 			key = indents + key + " = "
 		} else {
 			key = ""
@@ -894,4 +913,99 @@ func (p *Value) typeArrayString(layout int, indent int) string {
 		return p.comments("["+s+"]", layout, indent)
 	}
 	return "[" + s + "]"
+}
+
+func (it *Item) Apply(dst interface{}) (count int) {
+	if !it.IsValid() {
+		return
+	}
+	return it.Value.Apply(dst)
+}
+
+func (it *Value) Apply(dst interface{}) (count int) {
+	if !it.IsValid() {
+		return
+	}
+
+	var (
+		vv reflect.Value
+		ok bool
+	)
+
+	vv, ok = dst.(reflect.Value)
+	if ok {
+		vv = reflect.Indirect(vv)
+	} else {
+		vv = reflect.Indirect(reflect.ValueOf(dst))
+	}
+
+	if !vv.IsValid() || !vv.CanSet() {
+		return
+	}
+
+	return it.apply(vv)
+}
+
+func (it *Value) apply(vv reflect.Value) (count int) {
+
+	vt := vv.Type()
+
+	switch vt.Kind() {
+	case reflect.Bool:
+		if it.kind == Boolean {
+			vv.SetBool(it.Boolean())
+			count++
+		}
+	case reflect.String:
+		if it.kind >= String && it.kind < StringArray {
+			vv.SetString(it.String())
+			count++
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if it.kind == Integer {
+			vv.SetInt(it.Int())
+			count++
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if it.kind == Integer {
+			vv.SetUint(it.UInt())
+			count++
+		}
+	case reflect.Float32, reflect.Float64:
+		if it.kind == Float {
+			vv.SetFloat(it.Float())
+			count++
+		}
+	case reflect.Interface:
+		if vt.String() == "interface {}" && it.IsValid() {
+			vv.Set(reflect.ValueOf(it.v))
+			count++
+		}
+	case reflect.Struct:
+		if it.IsValid() && it.kind == Datetime && vt.String() == "time.Time" {
+			vv.Set(reflect.ValueOf(it.Datetime()))
+			count++
+		}
+	case reflect.Array, reflect.Slice:
+
+		l := it.Len()
+		if l <= 0 {
+			break
+		}
+
+		if vt.Kind() == reflect.Slice && vv.Len() < l {
+
+			// ? How to reflect.NewAt(typ, p)
+
+			if vv.Cap() < l {
+				l = vv.Cap()
+			}
+			vv.SetLen(l)
+		}
+
+		for i := 0; i < l && i < vv.Len(); i++ {
+			count += it.Index(i).apply(vv.Index(i))
+		}
+	}
+	return
 }

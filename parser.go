@@ -31,7 +31,7 @@ const (
 	tokenDatetime
 	tokenWhitespace
 	tokenComment
-	tokenTable
+	tokenTableName
 	tokenArrayOfTables
 	tokenNewLine
 	tokenKey
@@ -58,7 +58,7 @@ var tokensName = [...]string{
 	"Datetime",
 	"Whitespace",
 	"Comment",
-	"Table",
+	"TableName",
 	"ArrayOfTables",
 	"NewLine",
 	"Key",
@@ -171,7 +171,7 @@ func init() {
 		itsWhitespace,    // recEmpty
 		itsNewLine,       // recEmpty
 		itsComment,       // recEmpty
-		itsTable,         // recTable
+		itsTableName,     // recTable
 		itsArrayOfTables, // recArrayOfTables
 		itsKey,           // recEqual
 	}
@@ -179,7 +179,7 @@ func init() {
 		recEmpty,         // itsWhitespace
 		recEmpty,         // itsNewLine
 		recEmpty,         // itsComment
-		recEmpty,         // itsTable
+		recEmpty,         // itsTableName
 		recArrayOfTables, // itsArrayOfTables
 		recEqual,         // itsKey
 	}
@@ -199,7 +199,7 @@ func init() {
 		itsComment,       // recEmpty
 		itsNewLine,       // recEmpty
 		itsKey,           // recEqual
-		itsTable,         // recTable
+		itsTableName,     // recTable
 		itsArrayOfTables, // recArrayOfTables
 	}
 	stateTable = []receptor{
@@ -207,7 +207,7 @@ func init() {
 		recEmpty,         // itsComment
 		recEmpty,         // itsNewLine
 		recEqual,         // itsKey
-		recTable,         // itsTable
+		recTable,         // itsTableName
 		recArrayOfTables, // itsArrayOfTables
 	}
 
@@ -216,14 +216,14 @@ func init() {
 		itsComment,    // recArrayOfTables
 		itsNewLine,    // recEmpty
 		itsKey,        // recEqual
-		itsTable,      // recEmptyTable
+		itsTableName,  // recEmptyTable
 	}
 	stateArrayOfTables = []receptor{
 		recArrayOfTables, // itsWhitespace
 		recArrayOfTables, // itsComment
 		recEmpty,         // itsNewLine
 		recEqual,         // itsKey
-		recEmptyTable,    // itsTable
+		recEmptyTable,    // itsTableName
 	}
 
 	tokensValues = []tokenFn{
@@ -663,7 +663,7 @@ func itsDatetime(r rune, flag Token, maybe bool) (Status, Token) {
 }
 
 // [ASCII] http://en.wikipedia.org/wiki/ASCII#ASCII_printable_characters
-func itsTable(r rune, flag Token, maybe bool) (Status, Token) {
+func itsTableName(r rune, flag Token, maybe bool) (Status, Token) {
 	switch flag {
 	case 0:
 		if !maybe && r == '[' {
@@ -671,24 +671,24 @@ func itsTable(r rune, flag Token, maybe bool) (Status, Token) {
 		}
 	case 1:
 		if r == '[' {
-			return SNot, tokenTable
+			return SNot, tokenTableName
 		}
 		if isNewLine(r) || isWhitespace(r) || r == ']' {
-			return SInvalid, tokenTable
+			return SInvalid, tokenTableName
 		}
 		return SMaybe, 2
 	case 2:
 		if isNewLine(r) || isWhitespace(r) {
-			return SInvalid, tokenTable
+			return SInvalid, tokenTableName
 		}
 		if r != ']' {
 			return SMaybe, 2
 		}
 		return SMaybe, 3
 	case 3:
-		return SYes, tokenTable
+		return SYes, tokenTableName
 	}
-	return SNot, tokenTable
+	return SNot, tokenTableName
 }
 
 func itsArrayOfTables(r rune, flag Token, maybe bool) (Status, Token) {

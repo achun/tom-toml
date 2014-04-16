@@ -20,32 +20,62 @@ Say you have a TOML file that looks like this:
 [servers.alpha]
 ip = "10.0.0.1" # IP
 dc = "eqdc10"
+
+[smtpAuth]
+Identity = ""
+Username = "Do_Not_Reply"
+Password = "password"
+Host     = "example.com"
+Subject  = "message"
+To       = ["me@example.com","you@example.com"]
 ```
 
 Read the ip and dc like this:
 
 ```go
+package main
+
 import (
-    "fmt"
-    "github.com/achun/tom-toml"
+	"fmt"
+	"github.com/achun/tom-toml"
 )
+
+type smtpAuth struct {
+	Identity string
+	Username string
+	Password string
+	Host     string
+	Subject  string
+	To       []string
+}
+
 func main() {
-    conf, err := toml.LoadFile("good.toml")
-    if err != nil {
-        fmt.Println(err)
-        return
-    }
-    fmt.Println(conf["servers.alpha.ip"].String())
-    fmt.Println(conf["servers.alpha.dc"].String())
+	conf, err := toml.LoadFile("good.toml")
+
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println(conf["servers.alpha.ip"].String())
+	fmt.Println(conf["servers.alpha.dc"].String())
+
+	sa := smtpAuth{}
+	auth := conf.Fetch("smtpAuth") // case sensitive
+
+	sa.To = make([]string, auth["To"].Len())
+	auth.Apply(&sa)
+
+	fmt.Println(sa)
 }
 ```
 
 outputs:
 
-```
-10.0.0.1
-eqdc10
-```
+	10.0.0.1
+	eqdc10
+	{ Do_Not_Reply password example.com message [me@example.com you@example.com]}
+
 
 ## Documentation
 

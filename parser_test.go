@@ -2,6 +2,7 @@ package toml
 
 import (
 	"fmt"
+	"github.com/achun/testing-want"
 	"io/ioutil"
 	"strings"
 	"testing"
@@ -84,6 +85,7 @@ func assertParse(t *testing.T, str string, outs ...string) {
 }
 
 func TestScanner(t *testing.T) {
+	wt := want.T(t)
 	s := NewScanner([]byte("0123456789"))
 	scannerPanic(t, s, "get", "expected Next() first")
 	scannerPanic(t, s, "next", "<nil>")
@@ -101,32 +103,32 @@ func TestScanner(t *testing.T) {
 	s.Next()
 	s.Next()
 	s.Next()
-	assertEqual(t, s.Get(), "01")
-	assertEqual(t, s.Get(), "2")
+	wt.Equal(s.Get(), "01")
+	wt.Equal(s.Get(), "2")
 
 	scannerPanic(t, s, "get", "expected Next() first")
 	str := string(s.Next())
-	assertEqual(t, str, "3")
-	assertEqual(t, s.Get(), "3")
+	wt.Equal(str, "3")
+	wt.Equal(s.Get(), "3")
 	s.Next()
 	str = string(s.Next())
-	assertEqual(t, str, "5")
-	assertEqual(t, s.Get(), "4")
+	wt.Equal(str, "5")
+	wt.Equal(s.Get(), "4")
 	str = string(s.Next())
-	assertEqual(t, str, "5")
+	wt.Equal(str, "5")
 
 	s = NewScanner([]byte(""))
 	str = string(s.Next())
-	assertEqual(t, str, string(EOF))
+	wt.Equal(str, string(EOF))
 
 	s = NewScanner([]byte(" "))
 	str = string(s.Next())
-	assertEqual(t, str, " ")
-	assertEqual(t, s.Get(), " ")
+	wt.Equal(str, " ")
+	wt.Equal(s.Get(), " ")
 
 	str = string(s.Next())
-	assertEqual(t, str, string(EOF))
-	assertEqual(t, s.Get(), "")
+	wt.Equal(str, string(EOF))
+	wt.Equal(s.Get(), "")
 }
 
 func TestEmpty(t *testing.T) {
@@ -141,7 +143,7 @@ func TestBadParse(t *testing.T) {
 	assertBadParse(t, `key = [`, "incomplete Array")
 	assertBadParse(t, `key`, "invalid Key")
 	assertBadParse(t, `key # comment`, "incomplete Equal")
-	assertBadParse(t, `[table name]`, "invalid Table")
+	assertBadParse(t, `[table name]`, "invalid TableName")
 	assertBadParse(t, `key = # comment`, "incomplete Value")
 }
 
@@ -169,7 +171,7 @@ strings=[# comment 8
 # comment 10`,
 		"Comment", `# comment 1`,
 		"Comment", `# comment 2`,
-		"Table", `[table#]`, "Comment", `# comment 3`,
+		"TableName", `[table#]`, "Comment", `# comment 3`,
 		"ArrayOfTables", `[[arrayoftable]]`,
 		"Comment", `# comment 4`,
 		"Key", `key`, "Equal", `=`, "Integer", `-111`, "Comment", `# comment 5`,
@@ -196,12 +198,12 @@ func TestFile(t *testing.T) {
 	assertParse(t, string(buf),
 		"Comment", `# This is a TOML document. Boom.`,
 		"Key", `title`, "Equal", `=`, "String", `"TOML Example"`,
-		"Table", `[owner]`,
+		"TableName", `[owner]`,
 		"Key", `name`, "Equal", `=`, "String", `"Tom Preston-Werner"`,
 		"Key", `organization`, "Equal", `=`, "String", `"GitHub"`,
 		"Key", `bio`, "Equal", `=`, "String", `"GitHub Cofounder & CEO\nLikes tater tots and beer."`,
 		"Key", `dob`, "Equal", `=`, "Datetime", `1979-05-27T07:32:00Z`, "Comment", `# First class dates? Why not?`,
-		"Table", `[database]`,
+		"TableName", `[database]`,
 		"Key", `server`, "Equal", `=`, "String", `"192.168.1.1"`,
 		"Key", `ports`, "Equal", `=`,
 
@@ -211,16 +213,16 @@ func TestFile(t *testing.T) {
 
 		"Key", `connection_max`, "Equal", `=`, "Integer", `5000`,
 		"Key", `enabled`, "Equal", `=`, "Boolean", `true`,
-		"Table", `[servers]`,
+		"TableName", `[servers]`,
 		"Comment", `# You can indent as you please. Tabs or spaces. TOML don't care.`,
-		"Table", `[servers.alpha]`,
+		"TableName", `[servers.alpha]`,
 		"Key", `ip`, "Equal", `=`, "String", `"10.0.0.1"`,
 		"Key", `dc`, "Equal", `=`, "String", `"eqdc10"`,
-		"Table", `[servers.beta]`,
+		"TableName", `[servers.beta]`,
 		"Key", `ip`, "Equal", `=`, "String", `"10.0.0.2"`,
 		"Key", `dc`, "Equal", `=`, "String", `"eqdc10"`,
 		"Key", `country`, "Equal", `=`, "String", `"中国"`, "Comment", `# This should be parsed as UTF-8`,
-		"Table", `[clients]`,
+		"TableName", `[clients]`,
 		"Key", `data`, "Equal", `=`,
 
 		"ArrayLeftBrack", `[`,

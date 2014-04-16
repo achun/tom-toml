@@ -32,12 +32,12 @@ func (p Toml) String() (fmt string) {
 		}
 		pos := strings.LastIndex(key, ".")
 
-		if pos == -1 && it.kind < Table {
+		if pos == -1 && it.kind < TableName {
 			keys = append(keys, key)
 			keyidx = append(keyidx, it.idx)
 			it.key = key
 		} else {
-			if it.kind < Table {
+			if it.kind < TableName {
 				values = append(values, key)
 				it.key = key[pos+1:]
 			} else {
@@ -105,11 +105,18 @@ func (p Toml) String() (fmt string) {
 }
 
 // Fetch returns subset of p, and reset name. not clone.
-// such as:
-//	p.Fetch("")        // returns all valid elements in p
-//	p.Fetch("prefix")
-// 从 Toml 中提取出 prefix 开头的所有 Table 元素, 返回值也是一个 Toml.
-// 注意返回值是原 Toml 的子集, 没有进行克隆.
+/**
+such as:
+	p.Fetch("")       // returns all valid elements in p
+	p.Fetch("prefix") // same as p.Fetch("prefix.")
+从 Toml 中提取出 prefix 开头的所有 Table 元素, 返回值也是一个 Toml.
+注意:
+	返回值是原 Toml 的子集.
+	返回子集中不包括 [prefix] TableName.
+	对返回子集添加 *Item 不会增加到原 Toml 中.
+	对返回子集中的 *Item 进行更新, 原 Toml 也会更新.
+	子集中不会含有 ArrayOfTables 类型数据.
+*/
 func (p Toml) Fetch(prefix string) Toml {
 	nt := Toml{}
 	ln := len(prefix)
@@ -133,124 +140,61 @@ func (p Toml) Fetch(prefix string) Toml {
 	return nt
 }
 
-// TablesName returns all name of Table/ArrayOfTables
-// 返回 Toml 包含的所有 Table/ArrayOfTables的名称.
-func (p Toml) TablesName() []string {
-	var re []string
+// TableNames returns all name of TableName.
+// 返回所有 TableName 的名字和 ArrayOfTables 的名字.
+func (p Toml) TableNames() (tableNames []string, arrayOfTablesNames []string) {
 	for key, it := range p {
-		if it.IsValid() && (it.kind == Table || it.kind == ArrayOfTables) {
-			re = append(re, key)
+		if it.IsValid() {
+			if it.kind == TableName {
+				tableNames = append(tableNames, key)
+			} else if it.kind == ArrayOfTables {
+				arrayOfTablesNames = append(arrayOfTablesNames, key)
+			}
 		}
 	}
-	return re
+	return
 }
 
 // Apply to each field in the struct, case sensitive.
-func (p Toml) Apply(val interface{}, foo ...interface{}) (count int) {
+/**
+Apply 把 p 存储的值赋给 dst , TypeOf(dst).Kind() 为 reflect.Struct, 返回赋值成功的次数.
+*/
+func (p Toml) Apply(dst interface{}) (count int) {
 	var (
-		vv  reflect.Value
-		ok  bool
-		key string
-		it  *Item
+		vv reflect.Value
+		ok bool
 	)
 
-	if len(foo) != 0 {
-		key, ok = foo[0].(string)
-		if ok {
-			it = p[key]
-		} else {
-			it, ok = foo[0].(*Item)
-		}
-		if !it.IsValid() {
-			return
-		}
-	}
-
-	vv, ok = val.(reflect.Value)
+	vv, ok = dst.(reflect.Value)
 	if ok {
 		vv = reflect.Indirect(vv)
 	} else {
-		vv = reflect.Indirect(reflect.ValueOf(val))
+		vv = reflect.Indirect(reflect.ValueOf(dst))
 	}
+	return p.apply(vv)
+}
 
-	if !vv.IsValid() || !vv.CanSet() ||
-		len(key) == 0 &&
-			!it.IsValid() &&
-			vv.Kind() != reflect.Struct && vv.Kind() != reflect.Map {
+func (p Toml) apply(vv reflect.Value) (count int) {
+
+	var it *Item
+	vt := vv.Type()
+	if !vv.IsValid() || !vv.CanSet() || vt.Kind() != reflect.Struct || vt.String() == "time.Time" {
 		return
 	}
 
-	vt := vv.Type()
+	for i := 0; i < vv.NumField(); i++ {
+		name := vt.Field(i).Name
+		it = p[name]
 
-	switch vt.Kind() {
-	case reflect.Bool:
-		if it.kind == Boolean {
-			vv.SetBool(it.Boolean())
-			count++
+		if !it.IsValid() {
+			continue
 		}
-	case reflect.String:
-		if it.kind >= String && it.kind < StringArray {
-			vv.SetString(it.String())
-			count++
+
+		if it.kind == TableName {
+			count += p.Fetch(name).Apply(vv.Field(i))
+		} else {
+			count += it.apply(vv.Field(i))
 		}
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if it.kind == Integer {
-			vv.SetInt(it.Int())
-			count++
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if it.kind == Integer {
-			vv.SetUint(it.UInt())
-			count++
-		}
-	case reflect.Float32, reflect.Float64:
-		if it.kind == Float {
-			vv.SetFloat(it.Float())
-			count++
-		}
-	case reflect.Interface:
-		if vt.String() == "interface {}" && it.IsValid() {
-			vv.Set(reflect.ValueOf(it.v))
-			count++
-		}
-	case reflect.Struct:
-		if it.IsValid() && it.kind == Datetime && vt.String() == "time.Time" {
-			vv.Set(reflect.ValueOf(it.Datetime()))
-			count++
-			break
-		}
-		if len(key) != 0 {
-			p = p.Fetch(key)
-		}
-		for i := 0; i < vv.NumField(); i++ {
-			count += p.Apply(vv.Field(i), vt.Field(i).Name)
-		}
-	case reflect.Array, reflect.Slice:
-		l := it.Len()
-		if l == -1 {
-			break
-		}
-		if vt.Kind() == reflect.Slice && vv.Len() < l {
-			if vv.Cap() < l {
-				l = vv.Cap()
-			}
-			vv.SetLen(l)
-		}
-		vl := vv.Len()
-		for i := 0; i < l && i < vl; i++ {
-			count += p.Apply(vv.Index(i), &Item{*it.Index(i)})
-		}
-	case reflect.Map:
-		break // not support
-		if vt.Key().Kind() != reflect.String {
-			break
-		}
-		keys := vv.MapKeys()
-		for i := 0; i < len(keys); i++ {
-			count += p.Apply(vv.MapIndex(keys[i]), keys[i].String())
-		}
-	default:
-		println(vt.String())
 	}
 	return
 }
@@ -314,7 +258,7 @@ func Parse(source []byte) (tm Toml, err error) {
 			}
 			if flag == tokenArrayRightBrack {
 				if it.kind == ArrayOfTables {
-					ts := it.Tables(-1)
+					ts := it.Table(-1)
 					if ts != nil && ts[key] != nil {
 						ts[key].EolComment = s
 					}
@@ -360,8 +304,8 @@ func Parse(source []byte) (tm Toml, err error) {
 			}
 			err = InValidFormat
 
-		case tokenTable:
-			it = tm.newItem(Table)
+		case tokenTableName:
+			it = tm.newItem(TableName)
 			iv = nil
 
 			path = string(s[1 : len(s)-1])
@@ -369,7 +313,7 @@ func Parse(source []byte) (tm Toml, err error) {
 			tmp, ok := tm[path]
 			if ok {
 				it = tmp
-				if it.kind != Table {
+				if it.kind != TableName {
 					err = Redeclared
 					break
 				}
@@ -391,7 +335,7 @@ func Parse(source []byte) (tm Toml, err error) {
 			if !ok {
 
 				it = tm.newItem(ArrayOfTables)
-				err = it.AddTables(Tables{})
+				err = it.AddTable(Table{})
 				if err != nil {
 					break
 				}
@@ -404,7 +348,7 @@ func Parse(source []byte) (tm Toml, err error) {
 					err = Redeclared
 					break
 				}
-				it.AddTables(Tables{})
+				it.AddTable(Table{})
 
 			}
 
@@ -429,7 +373,7 @@ func Parse(source []byte) (tm Toml, err error) {
 
 			if it != nil && it.kind == ArrayOfTables {
 
-				ts := it.Tables(-1)
+				ts := it.Table(-1)
 				if ts == nil {
 					err = InternalError
 					break
@@ -464,7 +408,7 @@ func Parse(source []byte) (tm Toml, err error) {
 		case tokenArrayRightBrack:
 			if it != nil && it.kind == ArrayOfTables {
 
-				ts := it.Tables(-1)
+				ts := it.Table(-1)
 				if ts == nil {
 					err = InternalError
 					break

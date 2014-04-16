@@ -1,6 +1,4 @@
-
-<!-- saved from url=(0066)https://raw.github.com/mojombo/toml/master/tests/hard_example.toml -->
-<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"></head><body><pre style="word-wrap: break-word; white-space: pre-wrap;"># Test file for TOML
+# Test file for TOML
 # Only this one tries to emulate a TOML file written by a user of the kind of parser writers probably hate
 # This part you'll really hate
 
@@ -32,5 +30,4 @@ test_string = "You'll hate me after this - #"          # " Annoying, isn't it?
 #         "or here,
 #         and here"
 #         ]     End of array comment, forgot the #
-#number = 3.14  pi &lt;--again forgot the #         
-</pre></body></html>
+#number = 3.14  pi <--again forgot the #         
