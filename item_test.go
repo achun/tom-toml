@@ -12,22 +12,28 @@ func TestItemAdd(t *testing.T) {
 	wt.Nil(a.Add(1), "emptyArray.Add(int)")
 	wt.Nil(a.Add(2, 3), "IntergerArray.Add(int,int)")
 
-	wt.Equal(a.kind, IntegerArray, "Kind != IntergerArray")
+	wt.Equal(a.kind, IntegerArray)
 	wt.Equal(a.String(), "[1,2,3]")
 
 	aa := NewItem(Array)
-	wt.Nil(aa.Add(a), "emptyArray.Add(IntergerArray)")
-	wt.Equal(aa.kind, Array, "Kind != Array")
+	wt.Nil(aa.Add(a), "Array.Add(IntergerArray)")
+	wt.Equal(aa.kind, Array)
 
 	b := NewItem(Array)
 	b.Add("hello")
 	b.Add("world")
+	wt.Equal(b.kind, StringArray)
+
 	wt.Nil(aa.Add(b), "Array.Add(StringArray)")
+	wt.Equal(aa.kind, Array)
+
 	wt.Nil(aa.Add(a, b), "Array.Add(IntergerArray,StringArray)")
+	wt.Equal(aa.kind, Array)
 
 	wt.Equal(b.Add(1), NotSupported, "StringArray.Add(int)")
 
-	wt.Equal(aa.Add(1), NotSupported, "Array.Add(int)")
+	wt.Equal(aa.kind, Array)
+	wt.Equal(aa.Add(1), NotSupported, aa.kind.String(), ".Add(int)")
 
 }
 

@@ -33,6 +33,7 @@ const (
 	// 又因为 Toml 是个 map, 本身就具有 key/value 的存储功能, 所以无需另外定义 Table
 	TableName
 	ArrayOfTables
+	TableBody
 )
 
 func (k Kind) String() string {
@@ -54,6 +55,7 @@ var kindsName = [...]string{
 	"Array",
 	"TableName",
 	"ArrayOfTables",
+	"TableBody",
 }
 
 var (
@@ -311,61 +313,78 @@ func asValue(i interface{}) (v *Value, ok bool) {
 }
 
 // Add element for Array or typeArray.
-// Add 方法为类型数组或者二维数组添加值对象.
-// 如果 *Value 是 InvalidKind, Add 会根据参数的类型自动设置 kind. 否则要求参数符合 kind.
+/**
+Add 方法为数组添加元素, 支持空数组元素.
+p 本身的 Kind 决定是否支持参数元素 Kind.
+*/
 func (p *Value) Add(ai ...interface{}) error {
-	if p == nil || p.kind != InvalidKind && (p.kind < StringArray || p.kind > Array) {
+	if p == nil || p.kind < StringArray || p.kind > Array {
 		return NotSupported
 	}
 	if len(ai) == 0 {
 		return nil
 	}
+
 	vs := make([]*Value, len(ai))
+
 	k := 0
+	mix := false
+	// 全部检查
 	for i, s := range ai {
 		v, ok := asValue(s)
 		if !ok {
 			v = &Value{}
+			err := v.Set(s)
+			if err != nil {
+				return err
+			}
 		}
-		if ok && (v.kind == InvalidKind || v.kind > DatetimeArray) || !ok && nil != v.Set(s) {
+
+		if v == nil || v.kind > Array {
 			return NotSupported
 		}
-		if v.kind < StringArray {
-			k = k | 1<<v.kind
-		} else {
-			k = k | 1
-		}
-		if k > 2 && k != 1<<v.kind {
+
+		if p.kind != Array && v.kind != p.kind+String-StringArray {
 			return NotSupported
 		}
+
+		// 用于分析 kind 的情况
+		k = k | 1<<v.kind
+		if k != 1<<v.kind {
+			mix = true
+		}
+
 		v.idx = counter(v.idx)
 		vs[i] = v
 	}
-	if k == 1 { // typeArray
-		if p.canNotSet(Array) {
+
+	if mix {
+		nk := k >> (StringArray - 1) << (StringArray - 1)
+		if p.kind != Array || nk != k {
 			return NotSupported
 		}
-		if p.v == nil {
-			p.v = []*Value{}
+	} else {
+		if p.kind == Array {
+			if p.Len() > 0 && vs[0].kind < StringArray {
+				return NotSupported
+			}
+			// plain
+			if vs[0].kind < StringArray {
+				p.kind = vs[0].kind + StringArray - String
+			}
 		}
-		v := p.v.([]*Value)
-		p.v = append(v, vs...)
-	} else { // plain value
-
-		if p.v == nil {
-			p.v = []*Value{}
-		}
-		v := p.v.([]*Value)
-
-		if len(v) != 0 &&
-			(v[0].kind != vs[0].kind || p.kind != vs[0].kind+StringArray-String) {
-			return NotSupported
-		}
-		if len(v) == 0 {
-			p.kind = vs[0].kind + StringArray - String
-		}
-		p.v = append(v, vs...)
 	}
+
+	if p.v == nil {
+		p.v = make([]*Value, 0)
+	}
+	o, ok := p.v.([]*Value)
+
+	if !ok {
+		return NotSupported
+	}
+
+	p.v = append(o, vs...)
 	return nil
 }
 
@@ -622,6 +641,10 @@ func (p Table) String() (pretty string) {
 		pretty += it.string(1, 1)
 	}
 	return
+}
+
+func (p Table) Kind() Kind {
+	return TableBody
 }
 
 // Item 扩展自 Value, 支持 TableName 和 ArrayOfTables.

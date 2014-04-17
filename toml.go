@@ -203,6 +203,10 @@ func (p Toml) newItem(k Kind) *Item {
 	return NewItem(k)
 }
 
+func (p Toml) newValue(k Kind) *Value {
+	return NewValue(k)
+}
+
 var (
 	InValidFormat = errors.New("invalid TOML format")
 	Redeclared    = errors.New("duplicate definitionin TOML")
@@ -211,10 +215,12 @@ var (
 // 从 TOML 格式 source 解析出 Toml 对象.
 func Parse(source []byte) (tm Toml, err error) {
 	var (
-		it, iv        *Item
+		it            *Item
+		iv            *Value
 		path, key, fc string // fc is Multi-line comments cache
 		handler       TokenHandler
 		flag          Token
+		lastKey       string
 	)
 
 	p := &parse{Scanner: NewScanner(source)}
@@ -273,18 +279,21 @@ func Parse(source []byte) (tm Toml, err error) {
 				]
 			*/
 			if flag == tokenComma {
-				nit := iv.Value.Index(-1)
+				nit := iv.Index(-1)
 				if nit != nil {
 					nit.EolComment = s
 					break
 				}
 			}
-			println(flag.String())
 			err = InternalError
 
 		case tokenString, tokenInteger, tokenFloat, tokenBoolean, tokenDatetime:
 			if token == tokenString {
 				s = string([]byte(s)[1 : len(s)-1])
+			}
+			if iv == nil {
+				err = InternalError
+				break
 			}
 			// plain value
 			if iv.kind == InvalidKind {
@@ -293,7 +302,7 @@ func Parse(source []byte) (tm Toml, err error) {
 			}
 			// plain Array or typeArray
 			if iv.kind >= StringArray && iv.kind <= Array {
-				nit := tm.newItem(0)
+				nit := tm.newValue(0)
 				nit.MultiComments, fc = fc, ""
 
 				err = nit.SetAs(s, Kind(token))
@@ -310,46 +319,37 @@ func Parse(source []byte) (tm Toml, err error) {
 
 			path = string(s[1 : len(s)-1])
 
-			tmp, ok := tm[path]
+			_, ok := tm[path]
 			if ok {
-				it = tmp
-				if it.kind != TableName {
-					err = Redeclared
-					break
-				}
+				err = Redeclared
+				break
 			} else {
 				tm[path] = it
 			}
-			if it.MultiComments != "" && fc != "" {
-				it.MultiComments, fc = it.MultiComments+"\n"+fc, ""
-			} else {
-				it.MultiComments, fc = fc, ""
-			}
+
+			it.MultiComments, fc = fc, ""
 
 		case tokenArrayOfTables:
-			iv = nil
-
 			path = string(s[2 : len(s)-2])
+			iv = nil
 
 			tmp, ok := tm[path]
 			if !ok {
-
 				it = tm.newItem(ArrayOfTables)
-				err = it.AddTable(Table{})
-				if err != nil {
-					break
-				}
 				tm[path] = it
 
 			} else {
-
 				it = tmp
 				if it.kind != ArrayOfTables {
 					err = Redeclared
 					break
 				}
-				it.AddTable(Table{})
+			}
 
+			err = it.AddTable(Table{}) // alow empty table
+
+			if err != nil {
+				break
 			}
 
 			if it.MultiComments != "" && fc != "" {
@@ -363,75 +363,122 @@ func Parse(source []byte) (tm Toml, err error) {
 				err = NotSupported
 				break
 			}
-			iv = tm.newItem(0)
-			iv.key = s
+			lastKey = s
 			if path != "" {
-				key = path + "." + s
+				key = path + "." + s // table -> key
 			} else {
-				key = s
+				key = s // top key
 			}
 
 			if it != nil && it.kind == ArrayOfTables {
-
-				ts := it.Table(-1)
-				if ts == nil {
+				t := it.Table(-1)
+				if t == nil {
 					err = InternalError
 					break
 				}
-				ts[s] = &iv.Value
+
+				iv = tm.newValue(0)
+				iv.key = s
+
+				t[s] = iv
 
 			} else {
-				tm[key] = iv
+				nit := tm.newItem(0)
+				nit.key = s
+
+				tm[key] = nit
+				iv = &nit.Value
 			}
+
 			iv.MultiComments, fc = fc, ""
 
-		case tokenArrayLeftBrack:
-			if it.kind == ArrayOfTables {
-				err = InValidFormat
-				break
-			}
-			// [[..],[<-..]]
-			if iv.kind == Array && tm[key] == iv {
-				iv = tm.newItem(Array)
-				break
-			}
-			if iv.kind == InvalidKind { // [
-				iv.kind = Array
-			} else if iv.kind == Array { // [[
-				if iv.v != nil {
-					err = InternalError
-					break
-				}
-				iv = tm.newItem(Array) // new iv
-			}
-
-		case tokenArrayRightBrack:
-			if it != nil && it.kind == ArrayOfTables {
-
-				ts := it.Table(-1)
-				if ts == nil {
-					err = InternalError
-					break
-				}
-				nit := ts[key]
-				if nit == &iv.Value {
-					break
-				}
-				err = nit.Add(&iv.Value)
-				if err == nil {
-					iv = tm.newItem(Array)
-				}
-
-			} else {
-				// [[..->]]
-				nit := tm[key]
-				if nit != iv {
-					err = nit.Add(iv)
+		case tokenArrayLeftBrack: // [
+			// TOML 未明确数组的维度限制, 其示例用了 2 级深度
+			if iv != nil {
+				if iv.kind == InvalidKind {
+					iv.kind = Array
+				} else {
+					niv := tm.newValue(Array)
+					err = iv.Add(niv)
 					if err == nil {
-						iv = nit // nit == iv
+						iv = niv
 					}
+				}
+				break
+			}
+
+			iv = tm.newValue(Array)
+
+			t := it.Table(-1)
+			if t == nil {
+				err = InternalError
+				break
+			}
+
+			tiv := t[lastKey]
+			if !tiv.IsValid() || tiv.kind != Array {
+				err = InternalError
+				break
+			}
+
+			tiv.Add(iv)
+
+		case tokenArrayRightBrack: // ]
+
+			if iv == nil || it == nil {
+				err = InternalError
+				break
+			}
+			var tiv *Value
+
+			if it.kind == ArrayOfTables {
+
+				t := it.Table(-1)
+				if t == nil {
+					err = InternalError
 					break
 				}
+				tiv = t[lastKey]
+
+			} else if !iv.IsValid() ||
+				iv.kind < StringArray ||
+				iv.kind > Array {
+
+				err = InternalError
+				break
+			} else {
+				// fetch table.key
+				tit := tm[key]
+				if !tit.IsValid() {
+					err = InternalError
+					break
+				}
+				tiv = &tit.Value
+			}
+
+			if tiv.Len() <= 0 {
+				println("iv == nil || it == nil", lastKey)
+				err = InternalError
+				break
+			}
+			// 恢复 iv 的上级
+			if tiv.idx == iv.idx {
+				break
+			}
+
+			idx := iv.idx
+			err = InternalError
+			for tiv.Len() > 0 && tiv != nil {
+
+				iv = tiv.Index(tiv.Len() - 1)
+
+				if iv.IsValid() && iv.idx == idx {
+					iv = tiv
+					err = nil
+					break
+				}
+
+				tiv = iv
 			}
 
 		case tokenComma:
@@ -448,6 +495,12 @@ func Parse(source []byte) (tm Toml, err error) {
 	r := recEmpty(p)
 	for r != nil {
 		r = r(p)
+	}
+
+	if err != nil {
+		println(flag.String(), "===============", err.Error())
+		s := p.Scanner.(*scanner)
+		println(s.offset, s.size, string(s.buf))
 	}
 	// last comments
 	if fc != "" {

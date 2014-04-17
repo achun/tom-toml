@@ -32,8 +32,8 @@ func TestTomlEmpty(t *testing.T) {
 
 func TestToml(t *testing.T) {
 	tm := testToml(t, testData[0], testData[1:])
-	testToml(t, tm.String(), testData[1:])
-
+	beautiful := tm.String()
+	testToml(t, beautiful, testData[1:])
 }
 func testToml(t *testing.T, source string, as []string) Toml {
 	wt := want.T(t)
@@ -56,16 +56,27 @@ func testToml(t *testing.T, source string, as []string) Toml {
 	wt.Equal(ia.Index(0).String(), "[1,2]", "arrayarray.2.ia·Index(0)")
 	wt.Equal(ia.Index(0).EolComment, "# 11", "arrayarray.2.ia·Index(0).EolComment")
 
-	aot := tm["array.tables"]
-	wt.True(aot != nil, "array.tables invalid")
+	aot := tm["ArrayOfTables"]
+	wt.True(aot != nil, "ArrayOfTables invalid")
+	wt.Equal(aot.kind, ArrayOfTables)
+	wt.Equal(aot.Len(), 2, "ArrayOfTables Len")
 
 	ts := aot.Table(0)
-	wt.True(ts != nil, "array.tables.Index(0) invalid")
-	wt.Equal(ts["ia"].Int(), int64(1), "array.tables.Index(0).ia")
-	wt.Equal(ts["aa"].String(), "name", "array.tables.Index(0).aa")
+
+	wt.True(ts != nil, "ArrayOfTables.Index(0) invalid")
+	wt.Equal(ts["ia"].Int(), int64(1), "ArrayOfTables.Index(0).ia")
+	wt.Equal(ts["aa"].String(), "name", "ArrayOfTables.Index(0).aa")
+
 	ts = aot.Table(1)
-	wt.Equal(ts["ia"].Int(), int64(2), "array.tables.Index(1).ia")
-	wt.Equal(ts["aa"].String(), "jack", "array.tables.Index(1).aa")
+	wt.Equal(ts["ia"].Int(), int64(2), "ArrayOfTables.Index(1).ia")
+	wt.Equal(ts["aa"].String(), "jack", "ArrayOfTables.Index(1).aa")
+
+	sa := ts["sa"]
+	wt.True(sa.IsValid(), "ArrayOfTables.Index(1).sa invalid")
+	wt.Equal(sa.kind, StringArray)
+	wt.Equal(sa.Len(), 3)
+	wt.Equal(sa.String(), `["str1","","str2"]`, "ArrayOfTables.Index(1).sa")
+	wt.Equal(sa.Index(0).String(), "str1")
 	return tm
 }
 
@@ -146,6 +157,8 @@ var testData = []string{
 			ia = [ 1, 2,3] # 9 overwrite 7
 		
 			ba=[true,false]
+
+			sa=["str1","","str2"]
 		
 		[multiline]
 			ia= [ # 10.2
@@ -161,13 +174,15 @@ var testData = []string{
 				[1,2], # 11
 				[true],
 			]
-		[[array.tables]]
+		[[ArrayOfTables]]
 			ia=1
 			aa="name"
-		[[array.tables]]
+		[[ArrayOfTables]]
 			ia=2
 			aa="jack"
+			sa=["str1","","str2"]
 	# LastComments`,
+
 	"key", "fc", "# comment 0\n# comment 00",
 	"key", "ts", "\n# comment 0\n# comment 00\nkey = \"first key\"",
 
@@ -190,6 +205,7 @@ var testData = []string{
 	"table2.ia", "ec", "# 9 overwrite 7",
 
 	"table2.ba", "s", "[true,false]",
+	"table2.sa", "s", `["str1","","str2"]`,
 
 	"multiline.ia", "s", "[1,2,3]",
 	"multiline.ia", "ts", "\nia = [\n\t# 10.1\n\t1,2, # 10\n\t3] # 10.2",
@@ -197,7 +213,6 @@ var testData = []string{
 	"arrayarray.ia", "s", "[[1,2]]",
 	"arrayarray.2.ia", "s", "[[1,2],[true]]",
 	"arrayarray.2.ia", "ts", "\nia = [[1,2], # 11\n\t[true]]",
-	"array.tables", "s", "1", "ia",
 }
 
 var testDat = `
