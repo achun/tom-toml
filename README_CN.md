@@ -8,6 +8,11 @@ tom-toml
 
 [![wercker status](https://app.wercker.com/status/28e2ac15ba6930f928b10187ad4043c3 "wercker status")](https://app.wercker.com/project/bykey/28e2ac15ba6930f928b10187ad4043c3)
 
+## 文档
+
+Go DOC 文档请访问
+[gowalker.org](http://gowalker.org/github.com/achun/tom-toml).
+
 [readme.toml](readme.toml) 是用 toml 格式对 tom-toml 的深入介绍.
 
 ## Import
@@ -114,10 +119,40 @@ func main() {
 
 您应该注意到了注释的表现形式, tom-toml 提供了注释支持.
 
-## 文档
+## 注意
 
-Go DOC 文档请访问
-[gowalker.org](http://gowalker.org/github.com/achun/tom-toml).
+先写下解释用的 TOML 文本
+```toml
+[nameOftable]     # Kind() 为 TableName, String() 同此行
+key1 = "v1"       # Kind() 为 String, String() 是 "v1"
+key2 = "v2"       # Kind() 为 String, String() 是 "v2"
+[[arrayOftables]] # Kind() 为 ArrayOfTables, String() 是此行及以下行
+key3 = "v3"       # Kind() 为 String, String() 是 "v3"
+```
+
+因为采用 `map` 和支持注释的原因, 使用上有些特别. Toml 对象中存储的
+
+ - TableName 仅是 TOML 规范中的 `[nameOftable]` 的字面值.
+ - Table 仅是 TOML 规范中的 `[arrayOftables]` 的一个 Table.
+
+因此用 `tm` 表示上述 Toml 对象的话
+
+    tm["nameOftable"]       仅仅是 `[nameOftable]`, 不包含 Key/Value 部分
+    tm["arrayOftables"]     是全部的 `arrayOftables`, 因为它是数组
+    tm.Fetch("nameOftable") 是`[nameOftable]`的 Key/Value 部分, 类型是 Toml
+    tm["nameOftable.key1"]  直接访问到了值为 "v1" 的数据
+    t:=tm["arrayOftables"].Table(0) 是第一个 Table, Kind() 是 TableBody
+    t["key3"] Key3          只能这样访问到
+
+
+可以看出
+
+ - 只有通过 `Fetch()` 方法才能得到一个 TOML 规范中定义的 Table 的主体.
+ - 只有通过 `Table()` 方法才能得到 `Table` 类型.
+ - `arrayOftables.key3` 这种写法是错误的, 不满足 TOML 规范的定义
+
+map 带来 “nameOftable.key1” 这种点字符串方便的同时也产生了一些不便.
+map 进行存储的话只能是这样, 就算不支持注释, 也逃不过 ArrayOfTables 的古怪.
 
 
 ## 贡献

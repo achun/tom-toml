@@ -323,9 +323,9 @@ func Parse(source []byte) (tm Toml, err error) {
 			if ok {
 				err = Redeclared
 				break
-			} else {
-				tm[path] = it
 			}
+			it.key = path
+			tm[path] = it
 
 			it.MultiComments, fc = fc, ""
 

@@ -8,6 +8,8 @@ This library supports TOML version
 
 [![wercker status](https://app.wercker.com/status/28e2ac15ba6930f928b10187ad4043c3 "wercker status")](https://app.wercker.com/project/bykey/28e2ac15ba6930f928b10187ad4043c3)
 
+[中文 README](README_CN.md) 更详尽.
+
 ## Import
 
     import "github.com/achun/tom-toml"
