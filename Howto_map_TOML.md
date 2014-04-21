@@ -48,7 +48,9 @@ TOML 文本最后的注释比较特别, 只有一个. 可以特殊处理, 比如
 
     Table, ArrayOfTables 是可以互相嵌套的.
 
-    在 map 中无法直接用 tm["k.e.y"] 访问到 ArrayOfTables 中的元素, 因为 key 中没法让数组下标生效, 如果加入下标, 下标的维护将会很麻烦. 正如笔者前面说的, 如果把 ArraOfTables 当作 `Array Of TOML` 这就很容易理解了. 还不如直接命名为 TOMLArray 来的简单明了.
+    在 map 中无法直接用 tm["k.e.y"] 访问到 ArrayOfTables 中的元素, 因为 key 中没法让数组下标生效, 如果加入下标,维护将会很麻烦.
+    正如笔者前面说的, 如果把 ArraOfTables 当作 `Array Of TOML` 这就很容易理解了. 
+    还不如直接命名为 TOMLArray 来的简单明了.
 
     注释. ArrayOfTables 中的每一个下标 [[TablesName]] 也允许有注释.
 
@@ -130,7 +132,7 @@ Item 导出 Value 可以方便一些操作, 目前 Item 只是多支持了 Array
 限制的原因和内部实现有关, 不细述.
 
 ## ArrayOfTables
-对于 Table 官方规定下面的文档是合法的
+官方申明下面 Table 的文档是合法的.
 
 ```toml
 # [x] you
@@ -139,7 +141,7 @@ Item 导出 Value 可以方便一些操作, 目前 Item 只是多支持了 Array
 [x.y.z.w] # for this to work
 ```
 
-对于 ArrayOfTables 官方定义了下面的文档是非法的
+官方申明下面 ArrayOfTables的文档是非法的.
 
 ```toml
 # INVALID TOML DOC
@@ -154,7 +156,7 @@ Item 导出 Value 可以方便一些操作, 目前 Item 只是多支持了 Array
     name = "granny smith"
 ```
 
-官方文档没有明确下面的文档是否合法.
+官方文档未明确下面的文档是否合法.
 
 没有声明 `[foo]` 或者 `[[foo]]`, 直接
 
@@ -162,7 +164,7 @@ Item 导出 Value 可以方便一些操作, 目前 Item 只是多支持了 Array
 [[foo.bar]]
 ```
 
-我认为这是非法的, 因为如果补全这种写法的话, 可能是
+这应该是非法的, 因为如果补全这种写法的话, 可能是
 
 ```toml
 [foo]
