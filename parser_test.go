@@ -1,150 +1,122 @@
 package toml
 
 import (
-	"fmt"
 	"github.com/achun/testing-want"
 	"io/ioutil"
-	"strings"
 	"testing"
 )
 
-func scannerPanic(t *testing.T, s Scanner, fn string, msg string) {
-	defer func() {
-		err := recover()
-		str := fmt.Sprint(err)
-		if msg != str {
-			t.Fatal("expected panic:", msg, ",but got:", str)
+func assertBadParse(t *testing.T, src string, msg string) {
+	scan := NewScanner([]byte(src))
+	p := &parse{Scanner: scan}
+	wt := want.Want{t, 8}
+	got := 0
+	p.Handler(func(token Token, str string) (err error) {
+		if token == tokenError {
+			got++
+			wt.Equal(str, msg)
 		}
-	}()
-	if fn == "get" {
-		s.Get()
-	} else {
-		s.Next()
-	}
-}
-
-type parseTest struct {
-	parse
-	outs           []string
-	skipWhitespace bool
-	nopanic        bool
-}
-
-func (p *parseTest) Out(token Token, str string) (err error) {
-	if p.skipWhitespace && tokenWhitespace == token || token == tokenNewLine || token == tokenEOF {
 		return
-	}
-	if token == tokenError {
-		if p.nopanic {
-			return
-		}
-		panic(str)
-	}
-	p.outs = append(p.outs, tokensName[token], strings.TrimSpace(str))
-	return
+	})
+	p.Run()
+	wt.Skip = 3
+	wt.True(got == 1, "want an error: ", msg, " but got: ", got)
 }
-func assertBadParse(t *testing.T, str string, err string) {
-	buf := NewScanner([]byte(str))
-	p := &parseTest{parse{buf, 0, nil, nil}, []string{}, true, true}
-	p.Handler(p.Out)
-	p.run()
-	if p.err == nil || p.err.Error() != err {
-		t.Fatal("expected error:", err, ",but got:", p.err)
-	}
-}
+
+// outs =["token","value"]
 func assertParse(t *testing.T, str string, outs ...string) {
-	buf := NewScanner([]byte(str))
-	p := &parseTest{parse{buf, 0, nil, nil}, []string{}, true, false}
-	p.Handler(p.Out)
-	p.run()
+	scan := NewScanner([]byte(str))
+	p := &parse{Scanner: scan}
 	i := 0
-	for i < len(outs) && i < len(p.outs) {
-		if outs[i] != p.outs[i] || outs[i+1] != p.outs[i+1] {
-			fmt.Printf("%#v", p.outs)
-			t.Fatal("expected:", outs[i], outs[i+1], ",but got:", p.outs[i], p.outs[i+1])
-		}
-		i += 2
-	}
-	if i == 0 {
-		if len(p.outs) == len(outs) {
+	l := len(outs)
+	wt := want.Want{t, 8}
+	p.Handler(func(token Token, str string) (err error) {
+		if tokenWhitespace == token || token == tokenNewLine || token == tokenEOF {
 			return
 		}
-		if len(p.outs) == 0 {
-			t.Fatal("expected not found:", outs[0], outs[1])
+		if i >= l {
+			wt.True(false, "more outs:", i, ">=", l)
 		}
-		t.Fatal("unexpected:", p.outs[0], p.outs[1])
-	}
-	if len(outs) < len(p.outs) {
-		fmt.Printf("%#v", p.outs)
-		t.Fatal("unexpected:", p.outs[i], p.outs[i+1])
-	}
-	if len(outs) > len(p.outs) {
-		fmt.Printf("%#v", p.outs)
-		t.Fatal("expected not found:", outs[i], outs[i+1])
-	}
+		wt.Equal(token.String()+" "+str, outs[i])
+		i++
+		return
+	})
+	p.Run()
 }
 
 func TestScanner(t *testing.T) {
 	wt := want.T(t)
 	s := NewScanner([]byte("0123456789"))
-	scannerPanic(t, s, "get", "expected Next() first")
-	scannerPanic(t, s, "next", "<nil>")
-	scannerPanic(t, s, "get", "<nil>")
-	scannerPanic(t, s, "get", "expected Next() first")
+	wt.Equal(s.Fetch(true), "0")
+
+	r := s.Rune()
 	for i := 0; i < 10; i++ {
-		scannerPanic(t, s, "next", "<nil>")
+		wt.Equal(r, rune('0'+i))
+		r = s.Next()
 	}
-	scannerPanic(t, s, "next", "EOF")
-	scannerPanic(t, s, "get", "<nil>")
-	scannerPanic(t, s, "get", "buffer null")
-	scannerPanic(t, s, "next", "EOF")
 
-	s = NewScanner([]byte("0123456789"))
-	s.Next()
-	s.Next()
-	s.Next()
-	wt.Equal(s.Get(), "01")
-	wt.Equal(s.Get(), "2")
-
-	scannerPanic(t, s, "get", "expected Next() first")
-	str := string(s.Next())
-	wt.Equal(str, "3")
-	wt.Equal(s.Get(), "3")
-	s.Next()
-	str = string(s.Next())
-	wt.Equal(str, "5")
-	wt.Equal(s.Get(), "4")
-	str = string(s.Next())
-	wt.Equal(str, "5")
-
-	s = NewScanner([]byte(""))
-	str = string(s.Next())
-	wt.Equal(str, string(EOF))
-
-	s = NewScanner([]byte(" "))
-	str = string(s.Next())
-	wt.Equal(str, " ")
-	wt.Equal(s.Get(), " ")
-
-	str = string(s.Next())
-	wt.Equal(str, string(EOF))
-	wt.Equal(s.Get(), "")
+	wt.Equal(s.Next(), rune(EOF))
+	wt.True(s.Eof())
+	wt.Equal(s.Fetch(true), "123456789")
+	wt.Equal(s.Next(), rune(EOF))
+	wt.Equal(s.Next(), rune(EOF))
+	wt.Equal(s.Fetch(true), "")
 }
 
 func TestEmpty(t *testing.T) {
 	assertParse(t, ``)
 	assertParse(t, ` `)
+	assertParse(t, ` `)
 	assertParse(t, `
-		#`, "Comment", `#`)
+	   	
+
+		 `)
 }
 
-func TestBadParse(t *testing.T) {
+func TestToken(t *testing.T) {
+	const (
+		al = `ArrayLeftBrack [`
+		ar = `ArrayRightBrack ]`
+		eq = `Equal =`
+		i  = `Integer`
+		ca = `Comma ,`
+	)
+
+	assertParse(t, `string = "is string \n newline"`, `Key string`, eq, `String "is string \n newline"`)
+	assertParse(t, `#`, `Comment #`)
+	assertParse(t, `#
+
+		# 1  
+		`, `Comment #`, `Comment # 1`)
+	assertParse(t, `key = 1`, `Key key`, eq, `Integer 1`)
+	assertParse(t, `key = []`, `Key key`, eq, al, ar)
+	assertParse(t, `ia = [1 , 2]`, `Key ia`, eq, al, `Integer 1`, ca, `Integer 2`, ar)
+
+	assertBadParse(t, `key`, "invalid Key")
+	assertBadParse(t, `key 1`, "incomplete Equal")
+	assertBadParse(t, `ke y = name`, `incomplete Equal`)
+	assertBadParse(t, `key # comment`, "incomplete Equal")
+	assertBadParse(t, `key = name`, `incomplete Value`)
+	assertBadParse(t, `key = [1,ent]`, "incomplete Array")
 	assertBadParse(t, `key = [1,"ent"]`, "incomplete Array")
 	assertBadParse(t, `key = [`, "incomplete Array")
-	assertBadParse(t, `key`, "invalid Key")
-	assertBadParse(t, `key # comment`, "incomplete Equal")
-	assertBadParse(t, `[table name]`, "invalid TableName")
 	assertBadParse(t, `key = # comment`, "incomplete Value")
+
+	assertBadParse(t, `[]`, "invalid TableName")
+	assertBadParse(t, `[table ]`, "invalid TableName")
+	assertBadParse(t, `[tab le]`, "invalid TableName")
+	assertBadParse(t, `[ table]`, "invalid TableName")
+	assertBadParse(t, `[	table]`, "invalid TableName")
+	assertBadParse(t, `[[tables]`, "invalid ArrayOfTables")
+	assertBadParse(t, `[[ tables]]`, "invalid ArrayOfTables")
+	assertBadParse(t, `[[tab les]]`, "invalid ArrayOfTables")
+	assertBadParse(t, `[[tables ]]`, "invalid ArrayOfTables")
+	assertBadParse(t, `[[	tables]]`, "invalid ArrayOfTables")
+	assertBadParse(t, `[[tab	les]]`, "invalid ArrayOfTables")
+
+	assertParse(t, `[name]`, "TableName [name]")
+	assertParse(t, `[[name]]`, "ArrayOfTables [[name]]")
+
 }
 
 func TestParserOK(t *testing.T) {
@@ -169,24 +141,24 @@ strings=[# comment 8
 "b",
 ]# comment 9
 # comment 10`,
-		"Comment", `# comment 1`,
-		"Comment", `# comment 2`,
-		"TableName", `[table#]`, "Comment", `# comment 3`,
-		"ArrayOfTables", `[[arrayoftable]]`,
-		"Comment", `# comment 4`,
-		"Key", `key`, "Equal", `=`, "Integer", `-111`, "Comment", `# comment 5`,
-		"Key", `float`, "Equal", `=`, "Float", `123.22`,
-		"Key", `int`, "Equal", `=`, "Integer", `11234`,
-		"Key", `datetime`, "Equal", `=`, "Datetime", `2012-01-02T13:11:14Z`,
-		"Key", `string`, "Equal", `=`, "String", `"is string \n newline"`,
-		"Key", `intger`, "Equal", `=`,
-		"ArrayLeftBrack", `[`,
-		"Integer", `1`, "Comma", `,`, "Comment", `# comment 6`, "Integer", `2`, "Comment", `# comment 7`,
-		"ArrayRightBrack", `]`,
-		"Key", `strings`, "Equal", `=`,
-		"ArrayLeftBrack", `[`, "Comment", `# comment 8`,
-		"String", `"a"`, "Comma", `,`, "String", `"b"`, "Comma", `,`,
-		"ArrayRightBrack", `]`, "Comment", `# comment 9`, "Comment", `# comment 10`,
+		`Comment # comment 1`,
+		`Comment # comment 2`,
+		`TableName [table#]`, `Comment # comment 3`,
+		`ArrayOfTables [[arrayoftable]]`,
+		`Comment # comment 4`,
+		`Key key`, `Equal =`, `Integer -111`, `Comment # comment 5`,
+		`Key float`, `Equal =`, `Float 123.22`,
+		`Key int`, `Equal =`, `Integer 11234`,
+		`Key datetime`, `Equal =`, `Datetime 2012-01-02T13:11:14Z`,
+		`Key string`, `Equal =`, `String "is string \n newline"`,
+		`Key intger`, `Equal =`,
+		`ArrayLeftBrack [`,
+		`Integer 1`, `Comma ,`, `Comment # comment 6`, `Integer 2`, `Comment # comment 7`,
+		`ArrayRightBrack ]`,
+		`Key strings`, `Equal =`,
+		`ArrayLeftBrack [`, `Comment # comment 8`,
+		`String "a"`, `Comma ,`, `String "b"`, `Comma ,`,
+		`ArrayRightBrack ]`, `Comment # comment 9`, `Comment # comment 10`,
 	)
 }
 
@@ -196,62 +168,83 @@ func TestFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertParse(t, string(buf),
-		"Comment", `# This is a TOML document. Boom.`,
-		"Key", `title`, "Equal", `=`, "String", `"TOML Example"`,
-		"TableName", `[owner]`,
-		"Key", `name`, "Equal", `=`, "String", `"Tom Preston-Werner"`,
-		"Key", `organization`, "Equal", `=`, "String", `"GitHub"`,
-		"Key", `bio`, "Equal", `=`, "String", `"GitHub Cofounder & CEO\nLikes tater tots and beer."`,
-		"Key", `dob`, "Equal", `=`, "Datetime", `1979-05-27T07:32:00Z`, "Comment", `# First class dates? Why not?`,
-		"TableName", `[database]`,
-		"Key", `server`, "Equal", `=`, "String", `"192.168.1.1"`,
-		"Key", `ports`, "Equal", `=`,
+		`Comment # This is a TOML document. Boom.`,
+		`Key title`, `Equal =`, `String "TOML Example"`,
+		`TableName [owner]`,
+		`Comment # owner information`,
+		`Key name`, `Equal =`, `String "Tom Preston-Werner"`,
+		`Key organization`, `Equal =`, `String "GitHub"`,
+		`Key bio`, `Equal =`, `String "GitHub Cofounder & CEO\nLikes tater tots and beer."`,
+		`Key dob`, `Equal =`, `Datetime 1979-05-27T07:32:00Z`, `Comment # First class dates? Why not?`,
+		`TableName [database]`,
+		`Key server`, `Equal =`, `String "192.168.1.1"`,
+		`Key ports`, `Equal =`,
 
-		"ArrayLeftBrack", `[`,
-		"Integer", `8001`, "Comma", `,`, "Integer", `8001`, "Comma", `,`, "Integer", `8002`,
-		"ArrayRightBrack", `]`,
+		`ArrayLeftBrack [`,
+		`Integer 8001`, `Comma ,`, `Integer 8001`, `Comma ,`, `Integer 8002`,
+		`ArrayRightBrack ]`,
 
-		"Key", `connection_max`, "Equal", `=`, "Integer", `5000`,
-		"Key", `enabled`, "Equal", `=`, "Boolean", `true`,
-		"TableName", `[servers]`,
-		"Comment", `# You can indent as you please. Tabs or spaces. TOML don't care.`,
-		"TableName", `[servers.alpha]`,
-		"Key", `ip`, "Equal", `=`, "String", `"10.0.0.1"`,
-		"Key", `dc`, "Equal", `=`, "String", `"eqdc10"`,
-		"TableName", `[servers.beta]`,
-		"Key", `ip`, "Equal", `=`, "String", `"10.0.0.2"`,
-		"Key", `dc`, "Equal", `=`, "String", `"eqdc10"`,
-		"Key", `country`, "Equal", `=`, "String", `"中国"`, "Comment", `# This should be parsed as UTF-8`,
-		"TableName", `[clients]`,
-		"Key", `data`, "Equal", `=`,
+		`Key connection_max`, `Equal =`, `Integer 5000`,
+		`Key enabled`, `Equal =`, `Boolean true`,
+		`TableName [servers]`,
+		`Comment # You can indent as you please. Tabs or spaces. TOML don't care.`,
+		`TableName [servers.alpha]`,
+		`Key ip`, `Equal =`, `String "10.0.0.1"`,
+		`Key dc`, `Equal =`, `String "eqdc10"`,
+		`TableName [servers.beta]`,
+		`Key ip`, `Equal =`, `String "10.0.0.2"`,
+		`Key dc`, `Equal =`, `String "eqdc10"`,
+		`Key country`, `Equal =`, `String "中国"`, `Comment # This should be parsed as UTF-8`,
+		`TableName [clients]`,
+		`Key data`, `Equal =`,
 
-		"ArrayLeftBrack", `[`,
+		`ArrayLeftBrack [`,
 
-		"ArrayLeftBrack", `[`,
-		"String", `"gamma"`, "Comma", `,`, "String", `"delta"`,
-		"ArrayRightBrack", `]`,
-		"Comma", `,`,
-		"ArrayLeftBrack", `[`,
-		"Integer", `1`, "Comma", `,`, "Integer", `2`,
-		"ArrayRightBrack", `]`,
+		`ArrayLeftBrack [`,
+		`String "gamma"`, `Comma ,`, `String "delta"`,
+		`ArrayRightBrack ]`,
+		`Comma ,`,
+		`ArrayLeftBrack [`,
+		`Integer 1`, `Comma ,`, `Integer 2`,
+		`ArrayRightBrack ]`,
 
-		"ArrayRightBrack", `]`,
+		`ArrayRightBrack ]`,
 
-		"Comment", `# just an update to make sure parsers support it`,
-		"Comment", `# Line breaks are OK when inside arrays`,
-		"Key", `hosts`, "Equal", `=`,
+		`Comment # just an update to make sure parsers support it`,
+		`Comment # Line breaks are OK when inside arrays`,
+		`Key hosts`, `Equal =`,
 
-		"ArrayLeftBrack", `[`,
-		"String", `"alpha"`, "Comma", `,`, "String", `"omega"`,
-		"ArrayRightBrack", `]`,
+		`ArrayLeftBrack [`,
+		`String "alpha"`, `Comma ,`, `String "omega"`,
+		`ArrayRightBrack ]`,
 
-		"Comment", `# Products`,
-		"ArrayOfTables", `[[products]]`,
-		"Key", `name`, "Equal", `=`, "String", `"Hammer"`,
-		"Key", `sku`, "Equal", `=`, "Integer", `738594937`,
-		"ArrayOfTables", `[[products]]`,
-		"Key", `name`, "Equal", `=`, "String", `"Nail"`,
-		"Key", `sku`, "Equal", `=`, "Integer", `284758393`,
-		"Key", `color`, "Equal", `=`, "String", `"gray"`,
+		`Comment # Products`,
+		`ArrayOfTables [[products]]`,
+		`Key name`, `Equal =`, `String "Hammer"`,
+		`Key sku`, `Equal =`, `Integer 738594937`,
+		`ArrayOfTables [[products]]`,
+		`Key name`, `Equal =`, `String "Nail"`,
+		`Key sku`, `Equal =`, `Integer 284758393`,
+		`Key color`, `Equal =`, `String "gray"`,
+
+		`Comment # nested`,
+		`ArrayOfTables [[fruit]]`,
+		`Key name`, `Equal =`, `String "apple"`,
+
+		`TableName [fruit.physical]`,
+		`Key color`, `Equal =`, `String "red"`,
+		`Key shape`, `Equal =`, `String "round"`,
+
+		`ArrayOfTables [[fruit.variety]]`,
+		`Key name`, `Equal =`, `String "red delicious"`,
+
+		`ArrayOfTables [[fruit.variety]]`,
+		`Key name`, `Equal =`, `String "granny smith"`,
+
+		`ArrayOfTables [[fruit]]`,
+		`Key name`, `Equal =`, `String "banana"`,
+
+		`ArrayOfTables [[fruit.variety]]`,
+		`Key name`, `Equal =`, `String "plantain"`,
 	)
 }

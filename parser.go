@@ -13,7 +13,20 @@ const (
 	SMaybe
 	SYes
 	SInvalid
+	SYesSkip // SYes 并且多读了一个字符
 )
+
+var statusName = [...]string{
+	"SNot",
+	"SMaybe",
+	"SYes",
+	"SInvalid",
+	"SYesSkip",
+}
+
+func (t Status) String() string {
+	return statusName[t]
+}
 
 const (
 	BOM = 0xFEFF // UTF-8 encoded byte order mark
@@ -46,6 +59,9 @@ const (
 )
 
 func (t Token) String() string {
+	if int(t) >= len(tokensName) {
+		return fmt.Sprint(t)
+	}
 	return tokensName[t]
 }
 
@@ -74,6 +90,9 @@ var tokensName = [...]string{
 
 type TokenHandler func(Token, string) error
 type receptor func(parser) receptor
+
+// flag 的类型是复用的, 只有 Status == SYes 的时候才表示是 Token.
+// 否则表示的是下一次传入的状态
 type tokenFn func(r rune, flag Token, maybe bool) (Status, Token)
 
 type parser interface {
@@ -84,6 +103,9 @@ type parser interface {
 	Unexpected(token Token)
 	ArrayDimensions(add int) int
 	Handler(TokenHandler)
+	Skip()
+	IsSkip() bool
+	Run()
 }
 
 type parse struct {
@@ -91,14 +113,29 @@ type parse struct {
 	arrayDimensions int
 	err             error
 	handler         TokenHandler
+	skip            bool
 }
 
-func (p *parse) run() {
+func (p *parse) Run() {
+	// first skip, Scanner pre-readed one runc, always
+	// Scanner 总是预先读取了第一个字符
+	p.skip = true
 	r := recEmpty(p)
 	for r != nil {
 		r = r(p)
 	}
 }
+
+func (p *parse) IsSkip() bool {
+	skip := p.skip
+	p.skip = false
+	return skip
+}
+
+func (p *parse) Skip() {
+	p.skip = true
+}
+
 func (p *parse) NotMatch(token Token) {
 	p.err = errors.New("incomplete " + tokensName[token])
 	p.Token(tokenError)
@@ -117,15 +154,20 @@ func (p *parse) Token(token Token) (err error) {
 		err = p.err
 		str = err.Error()
 	} else {
-		if token != tokenEOF {
-			str = strings.TrimSpace(p.Get())
+		str = p.Fetch(!p.skip)
+		if token != tokenEOF && token != tokenWhitespace {
+			str = strings.TrimSpace(str)
 		}
 	}
+
 	if p.handler == nil {
 		fmt.Println(tokensName[token], str)
 	} else {
 		if token == tokenError {
 			p.handler(token, str)
+			if err == nil {
+				err = errors.New("tokenError")
+			}
 		} else {
 			err = p.handler(token, str)
 		}
@@ -167,6 +209,7 @@ var stateEmpty, stateEqual, stateTable, stateArrayOfTables,
 	stateDatetimeArray []receptor
 
 func init() {
+
 	tokensEmpty = []tokenFn{
 		itsWhitespace,    // recEmpty
 		itsNewLine,       // recEmpty
@@ -198,32 +241,32 @@ func init() {
 		itsWhitespace,    // recEmpty
 		itsComment,       // recEmpty
 		itsNewLine,       // recEmpty
-		itsKey,           // recEqual
 		itsTableName,     // recTable
 		itsArrayOfTables, // recArrayOfTables
+		itsKey,           // recEqual
 	}
 	stateTable = []receptor{
 		recEmpty,         // itsWhitespace
 		recEmpty,         // itsComment
 		recEmpty,         // itsNewLine
-		recEqual,         // itsKey
 		recTable,         // itsTableName
 		recArrayOfTables, // itsArrayOfTables
+		recEqual,         // itsKey
 	}
 
 	tokensArrayOfTables = []tokenFn{
 		itsWhitespace, // recArrayOfTables
 		itsComment,    // recArrayOfTables
 		itsNewLine,    // recEmpty
-		itsKey,        // recEqual
 		itsTableName,  // recEmptyTable
+		itsKey,        // recEqual
 	}
 	stateArrayOfTables = []receptor{
 		recArrayOfTables, // itsWhitespace
 		recArrayOfTables, // itsComment
 		recEmpty,         // itsNewLine
-		recEqual,         // itsKey
 		recEmptyTable,    // itsTableName
+		recEqual,         // itsKey
 	}
 
 	tokensValues = []tokenFn{
@@ -366,17 +409,19 @@ func init() {
 func rec(fns []tokenFn, rs []receptor, p parser) receptor {
 	var (
 		st    Status
-		flag  Token
+		flag  Token // flag 是 uint 和 Token 复用
 		maybe int
 		r     rune
 	)
 	flags := make([]Token, len(fns))
 	skips := make([]bool, len(fns))
 	for {
-		if p.Eof() {
-			break
+
+		if p.IsSkip() {
+			r = p.Rune()
+		} else {
+			r = p.Next()
 		}
-		r = p.Next()
 
 		if r == RuneError {
 			p.Invalid(tokenRuneError)
@@ -386,14 +431,16 @@ func rec(fns []tokenFn, rs []receptor, p parser) receptor {
 			if skip {
 				continue
 			}
-			switch st, flag = fns[i](r, flags[i], maybe != 0); st {
-			case SYes:
+			st, flag = fns[i](r, flags[i], maybe != 0)
+			switch st {
+			case SYes, SYesSkip:
+				if st == SYesSkip {
+					p.Skip()
+				}
 				if p.Token(flag) != nil {
 					return nil
 				}
-				if r == EOF {
-					p.Token(tokenEOF)
-				}
+
 				return rs[i]
 
 			case SNot:
@@ -403,8 +450,10 @@ func rec(fns []tokenFn, rs []receptor, p parser) receptor {
 				skips[i] = true
 
 			case SInvalid:
-				maybe--
-				p.Invalid(flag)
+				if flags[i] != 0 {
+					maybe--
+				}
+				p.Invalid(Token(flag))
 				return nil
 
 			case SMaybe:
@@ -509,38 +558,53 @@ func recDatetimeArray(p parser) receptor {
 
 // tokens
 func itsWhitespace(r rune, flag Token, maybe bool) (Status, Token) {
+	if maybe && flag == 0 {
+		return SNot, tokenWhitespace
+	}
+
 	switch flag {
 	case 0:
-		if !maybe && isWhitespace(r) {
+		if isWhitespace(r) {
 			return SMaybe, 1
 		}
 	case 1:
 		if isWhitespace(r) {
 			return SMaybe, 1
 		}
-		return SYes, tokenWhitespace
+		return SYesSkip, tokenWhitespace
 	}
 	return SNot, tokenWhitespace
 }
 func itsComment(r rune, flag Token, maybe bool) (Status, Token) {
+	if maybe && flag == 0 {
+		return SNot, tokenComment
+	}
+
 	switch flag {
 	case 0:
-		if !maybe && r == '#' {
+		if r == '#' {
 			return SMaybe, 1
 		}
 	case 1:
-		if isNewLine(r) || isEOF(r) {
+		if isEOF(r) {
 			return SYes, tokenComment
+		}
+		if isNewLine(r) {
+			return SYesSkip, tokenComment
 		}
 		return SMaybe, 1
 	}
 	return SNot, tokenComment
 }
 func itsString(r rune, flag Token, maybe bool) (Status, Token) {
+	if maybe && flag == 0 {
+		return SNot, tokenString
+	}
+
 	switch flag {
 	case 0:
-		if !maybe && r == '"' {
-			return SMaybe, 2
+		if r == '"' {
+			return SMaybe, 1
 		}
 		return SNot, tokenString
 	case 1:
@@ -548,23 +612,25 @@ func itsString(r rune, flag Token, maybe bool) (Status, Token) {
 			return SMaybe, 2
 		}
 	case 2:
+		if r == '"' {
+			return SYes, tokenString
+		}
 		if r == '\\' {
 			return SMaybe, 1
-		}
-		if r == '"' {
-			return SMaybe, 3
 		}
 		if !isNewLine(r) {
 			return SMaybe, 2
 		}
-	case 3:
-		if isSuffixOfValue(r) {
-			return SYes, tokenString
-		}
 	}
 	return SInvalid, tokenString
 }
+
+// 要求在 itsFlaot 的前面
 func itsInteger(r rune, flag Token, maybe bool) (Status, Token) {
+	if maybe && flag == 0 {
+		return SNot, tokenInteger
+	}
+
 	switch flag {
 	case 0:
 		if r == '-' {
@@ -582,12 +648,14 @@ func itsInteger(r rune, flag Token, maybe bool) (Status, Token) {
 			return SMaybe, 2
 		}
 		if isSuffixOfValue(r) {
-			return SYes, tokenInteger
+			return SYesSkip, tokenInteger
 		}
 	}
 	return SNot, tokenInteger
 }
+
 func itsFloat(r rune, flag Token, maybe bool) (Status, Token) {
+	// 还是有 bug ??? 注释中可能有这些值
 	switch flag {
 	case 0:
 		if r == '-' {
@@ -617,11 +685,12 @@ func itsFloat(r rune, flag Token, maybe bool) (Status, Token) {
 			return SMaybe, 4
 		}
 		if isSuffixOfValue(r) {
-			return SYes, tokenFloat
+			return SYesSkip, tokenFloat
 		}
 	}
 	return SNot, tokenFloat
 }
+
 func itsBoolean(r rune, flag Token, maybe bool) (Status, Token) {
 	const layout = "truefalse"
 	switch flag {
@@ -641,7 +710,7 @@ func itsBoolean(r rune, flag Token, maybe bool) (Status, Token) {
 		}
 	case 4, 9:
 		if isSuffixOfValue(r) {
-			return SYes, tokenBoolean
+			return SYesSkip, tokenBoolean
 		}
 	}
 	return SNot, tokenBoolean
@@ -657,7 +726,7 @@ func itsDatetime(r rune, flag Token, maybe bool) (Status, Token) {
 		}
 	}
 	if flag == 20 && isSuffixOfValue(r) {
-		return SYes, tokenDatetime
+		return SYesSkip, tokenDatetime
 	}
 	return SInvalid, tokenDatetime
 }
@@ -673,7 +742,7 @@ func itsTableName(r rune, flag Token, maybe bool) (Status, Token) {
 		if r == '[' {
 			return SNot, tokenTableName
 		}
-		if isNewLine(r) || isWhitespace(r) || r == ']' {
+		if isNewLine(r) || isWhitespace(r) || r == ']' || r == '.' {
 			return SInvalid, tokenTableName
 		}
 		return SMaybe, 2
@@ -684,8 +753,6 @@ func itsTableName(r rune, flag Token, maybe bool) (Status, Token) {
 		if r != ']' {
 			return SMaybe, 2
 		}
-		return SMaybe, 3
-	case 3:
 		return SYes, tokenTableName
 	}
 	return SNot, tokenTableName
@@ -698,7 +765,7 @@ func itsArrayOfTables(r rune, flag Token, maybe bool) (Status, Token) {
 			return SMaybe, flag + 1
 		}
 	case 2:
-		if isNewLine(r) || isWhitespace(r) || r == ']' {
+		if isNewLine(r) || isWhitespace(r) || r == ']' || r == '.' {
 			return SInvalid, tokenArrayOfTables
 		}
 		return SMaybe, 3
@@ -711,31 +778,15 @@ func itsArrayOfTables(r rune, flag Token, maybe bool) (Status, Token) {
 		}
 		return SMaybe, 4
 	case 4:
-		if r == ']' {
-			return SMaybe, 5
+		if r != ']' {
+			return SInvalid, tokenArrayOfTables
 		}
-		return SInvalid, tokenArrayOfTables
-	case 5:
 		return SYes, tokenArrayOfTables
 	}
 	return SNot, tokenArrayOfTables
 }
 func itsNewLine(r rune, flag Token, maybe bool) (Status, Token) {
 	if isNewLine(r) {
-		return SYes, tokenNewLine
-	}
-	return SNot, tokenNewLine
-}
-func itsSpace(r rune, flag Token, maybe bool) (Status, Token) {
-	switch flag {
-	case 0:
-		if isWhitespace(r) || isNewLine(r) {
-			return SMaybe, 1
-		}
-	case 1:
-		if isWhitespace(r) || isNewLine(r) {
-			return SMaybe, 1
-		}
 		return SYes, tokenNewLine
 	}
 	return SNot, tokenNewLine
@@ -753,7 +804,7 @@ func itsKey(r rune, flag Token, maybe bool) (Status, Token) {
 			return SInvalid, tokenKey
 		}
 		if r == '=' || isWhitespace(r) {
-			return SYes, tokenKey
+			return SYesSkip, tokenKey
 		}
 		return SMaybe, 1
 	}
@@ -763,45 +814,27 @@ func itsEqual(r rune, flag Token, maybe bool) (Status, Token) {
 	if maybe && flag == 0 {
 		return SNot, tokenEqual
 	}
-	if flag == 1 {
-		return SYes, tokenEqual
-	}
 	if r == '=' {
-		return SMaybe, 1
+		return SYes, tokenEqual
 	}
 	return SNot, tokenEqual
 }
 
 func itsComma(r rune, flag Token, maybe bool) (Status, Token) {
-	switch flag {
-	case 0:
-		if !maybe && r == ',' {
-			return SMaybe, 1
-		}
-	case 1:
+	if !maybe && r == ',' {
 		return SYes, tokenComma
 	}
 	return SNot, tokenComma
 }
 
 func itsArrayLeftBrack(r rune, flag Token, maybe bool) (Status, Token) {
-	switch flag {
-	case 0:
-		if !maybe && r == '[' {
-			return SMaybe, 1
-		}
-	case 1:
+	if !maybe && r == '[' {
 		return SYes, tokenArrayLeftBrack
 	}
 	return SNot, tokenArrayLeftBrack
 }
 func itsArrayRightBrack(r rune, flag Token, maybe bool) (Status, Token) {
-	switch flag {
-	case 0:
-		if !maybe && r == ']' {
-			return SMaybe, 1
-		}
-	case 1:
+	if !maybe && r == ']' {
 		return SYes, tokenArrayRightBrack
 	}
 	return SNot, tokenArrayRightBrack
@@ -815,6 +848,7 @@ func is09(r rune) bool {
 	return r >= '0' && r <= '9'
 }
 
+// Spec: Whitespace means tab (0x09) or space (0x20).
 func isWhitespace(r rune) bool {
 	return r == ' ' || r == '\t' // || r == '\v' || r == '\f' // 0x85, 0xA0 ?
 }

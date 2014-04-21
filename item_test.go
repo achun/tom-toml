@@ -7,25 +7,46 @@ import (
 
 func TestItemAdd(t *testing.T) {
 	wt := want.T(t)
-	a := NewItem(Array)
+
+	wt.Error(MakeItem(InvalidKind).Add(1))
+	wt.Error(MakeItem(String).Add(1))
+	wt.Error(MakeItem(Integer).Add(1))
+	wt.Error(MakeItem(Float).Add(1))
+	wt.Error(MakeItem(Boolean).Add(1))
+	wt.Error(MakeItem(Datetime).Add(1))
+
+	a := MakeItem(Array)
 
 	wt.Nil(a.Add(1), "emptyArray.Add(int)")
 	wt.Nil(a.Add(2, 3), "IntergerArray.Add(int,int)")
 
 	wt.Equal(a.kind, IntegerArray)
+	wt.Equal(a.Len(), 3)
 	wt.Equal(a.String(), "[1,2,3]")
+	wt.Equal(a.Index(0).Int(), int64(1))
+	wt.Equal(a.Index(1).Int(), int64(2))
+	wt.Equal(a.Index(2).Int(), int64(3))
+	// 负数下标
+	wt.Equal(a.Index(-1).Int(), int64(3))
+	// 超出下标
+	wt.Nil(a.Index(3))
+	wt.Equal(a.Index(3).Int(), int64(0))
 
-	aa := NewItem(Array)
+	wt.Error(a.Add("string"))
+
+	aa := MakeItem(Array)
 	wt.Nil(aa.Add(a), "Array.Add(IntergerArray)")
 	wt.Equal(aa.kind, Array)
 
-	b := NewItem(Array)
-	b.Add("hello")
-	b.Add("world")
+	b := MakeItem(Array)
+	wt.Nil(b.Add("hello"))
+	wt.Nil(b.Add("world"))
 	wt.Equal(b.kind, StringArray)
+	wt.Equal(b.Len(), 2)
 
 	wt.Nil(aa.Add(b), "Array.Add(StringArray)")
 	wt.Equal(aa.kind, Array)
+	wt.Equal(aa.Len(), 2)
 
 	wt.Nil(aa.Add(a, b), "Array.Add(IntergerArray,StringArray)")
 	wt.Equal(aa.kind, Array)
@@ -39,23 +60,10 @@ func TestItemAdd(t *testing.T) {
 
 func TestItemPlain(t *testing.T) {
 	wt := want.T(t)
-	a := NewItem(Datetime)
+	a := MakeItem(Datetime)
 
 	wt.Nil(a.SetAs("2012-01-02T13:11:14Z", Datetime))
 
 	wt.Equal(a.TomlString(), "2012-01-02T13:11:14Z")
-	wt.Equal(a.String(), "2012-01-02 13:11:14")
-}
-
-func TestItemArrayOfTable(t *testing.T) {
-	wt := want.T(t)
-
-	aot := NewItem(ArrayOfTables)
-	v := NewItem(Integer)
-	v.Set(1)
-
-	ts := Table{"A": &v.Value}
-	wt.Nil(aot.AddTable(ts))
-	wt.Nil(v.Set(2))
-	wt.Equal(aot.Table(-1)["A"].Int(), v.Int())
+	wt.Equal(a.String(), "2012-01-02T13:11:14Z")
 }

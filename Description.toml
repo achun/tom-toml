@@ -14,7 +14,7 @@ keyName = "string value" # 这是行尾注释, EolComment, 保存在 Value struc
 # 但它的目是为格式化输出做准备的, 不是用来保存最原始的 keyName.
 # 因为 Toml 的定义是 map[string]*Item, 实际操作中使用者可能会:
 # 	delete(m, "keyName")
-# 	m["kenName"] = NewItem
+# 	m["kenName"] = MakeItem
 # 也就是说 keyName 是作为 key 保存在 map 中.
 # 因此使用者需要理解 tom-toml 对 key/value 的管理方式.
 # 另外, MultiComments 总是附加于紧随其后的 TOML 定义

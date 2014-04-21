@@ -3,7 +3,6 @@ package toml
 import (
 	"errors"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,8 +32,10 @@ const (
 	// 又因为 Toml 是个 map, 本身就具有 key/value 的存储功能, 所以无需另外定义 Table
 	TableName
 	ArrayOfTables
-	TableBody
 )
+
+// 内部使用的 id
+var iD = time.Now().UTC().Format(".ID20060102150405.000000000")
 
 func (k Kind) String() string {
 	return kindsName[k]
@@ -55,7 +56,6 @@ var kindsName = [...]string{
 	"Array",
 	"TableName",
 	"ArrayOfTables",
-	"TableBody",
 }
 
 var (
@@ -79,22 +79,23 @@ func counter(idx int) int {
 	return _counter
 }
 
-// NewItem 函数返回一个新 *Item.
-// 为保持格式化输出次序, NewItem 内部使用了一个计数器.
-// 使用者应该使用该函数来得到新的 *Item. 而不是用 new(Item) 获得.
+// MakeItem 函数返回一个新 Item.
+// 为保持格式化输出次序, MakeItem 内部使用了一个计数器.
+// 使用者应该使用该函数来得到新的 Item. 而不是用 new(Item) 获得.
 // 那样的话就无法保持格式化输出次序.
-func NewItem(kind Kind) *Item {
-	if kind > ArrayOfTables {
-		return nil
+func MakeItem(kind Kind) Item {
+	if kind < 0 || kind > ArrayOfTables {
+		panic(NotSupported)
 	}
 
-	it := &Item{}
+	it := Item{}
+	it.Value = &Value{}
 	it.kind = kind
 
 	it.idx = counter(0)
 
 	if kind == ArrayOfTables {
-		it.v = []Table{}
+		it.v = Tables{}
 	}
 
 	return it
@@ -135,11 +136,27 @@ func (p *Value) Kind() Kind {
 	return p.kind
 }
 
-func (p *Value) KindIs(kind Kind) bool {
+/**
+Id 返回 int 值, 此值表示 p 在运行期中的唯一序号, 按生成次序.
+返回 0 表示该 p 无效.
+*/
+func (p *Value) Id() int {
+	if !p.IsValid() {
+		return 0
+	}
+	return p.idx
+}
+
+func (p *Value) KindIs(kind ...Kind) bool {
 	if p == nil {
 		return false
 	}
-	return p.kind == kind
+	for _, k := range kind {
+		if p.kind == k {
+			return true
+		}
+	}
+	return false
 }
 
 // IsValid 返回 p 是否有效.
@@ -260,6 +277,27 @@ func (p *Value) Set(x interface{}) error {
 	return nil
 }
 
+func conv(s string, kind Kind) (v interface{}, err error) {
+	switch kind {
+	case String:
+		v = s
+	case Integer:
+		v, err = strconv.ParseInt(s, 10, 64)
+	case Float:
+		v, err = strconv.ParseFloat(s, 64)
+	case Boolean:
+		v, err = strconv.ParseBool(s)
+	case Datetime:
+		v, err = time.Parse(time.RFC3339, s) // time zone +00:00
+		if err == nil {
+			v = v.(time.Time).UTC()
+		}
+	default:
+		err = NotSupported
+	}
+	return
+}
+
 // SetAs是个便捷方法, 通过参数 kind 对 string 参数进行转换并执行 Set.
 func (p *Value) SetAs(s string, kind Kind) (err error) {
 	if p.canNotSet(kind) {
@@ -288,7 +326,7 @@ func (p *Value) SetAs(s string, kind Kind) (err error) {
 		}
 	case Datetime:
 		var v time.Time
-		v, err = time.Parse(time.RFC3339, s) // time zone +00:00
+		v, err = time.Parse(time.RFC3339, s)
 		if err == nil {
 			p.v = v.UTC()
 		}
@@ -303,9 +341,9 @@ func (p *Value) SetAs(s string, kind Kind) (err error) {
 }
 
 func asValue(i interface{}) (v *Value, ok bool) {
-	it, ok := i.(*Item)
+	it, ok := i.(Item)
 	if ok {
-		v = &it.Value
+		v = it.Value
 	} else {
 		v, ok = i.(*Value)
 	}
@@ -329,9 +367,11 @@ func (p *Value) Add(ai ...interface{}) error {
 
 	k := 0
 	mix := false
-	// 全部检查
+
+	// 全部检查一遍
 	for i, s := range ai {
 		v, ok := asValue(s)
+
 		if !ok {
 			v = &Value{}
 			err := v.Set(s)
@@ -400,8 +440,10 @@ func (p *Value) TomlString() string {
 	return p.string(1, 0)
 }
 
-// 如果值是 Interger 可以使用 Int 返回其 int64 值.
-// 否则返回 0
+/**
+如果值是 Interger 可以使用 Int 返回其 int64 值.
+否则返回 0
+*/
 func (p *Value) Int() int64 {
 	if !p.IsValid() || p.kind != Integer {
 		return 0
@@ -409,8 +451,21 @@ func (p *Value) Int() int64 {
 	return p.v.(int64)
 }
 
-// 如果值是 Interger 可以使用 UInt 返回其 uint64 值.
-// 否则返回 0
+/**
+如果值是 Interger 可以使用 Int 返回其 int 值.
+否则返回 0
+*/
+func (p *Value) Interger() int {
+	if !p.IsValid() || p.kind != Integer {
+		return 0
+	}
+	return int(p.v.(int64))
+}
+
+/**
+如果值是 Interger 可以使用 UInt 返回其 uint64 值.
+否则返回 0
+*/
 func (p *Value) UInt() uint64 {
 	if !p.IsValid() || p.kind != Integer {
 		return 0
@@ -418,8 +473,10 @@ func (p *Value) UInt() uint64 {
 	return uint64(p.v.(int64))
 }
 
-// 如果值是 Float 可以使用 Float 返回其 float64 值.
-// 否则返回 0
+/**
+如果值是 Float 可以使用 Float 返回其 float64 值.
+否则返回 0
+*/
 func (p *Value) Float() float64 {
 	if !p.IsValid() || p.kind != Float {
 		return 0
@@ -427,8 +484,10 @@ func (p *Value) Float() float64 {
 	return p.v.(float64)
 }
 
-// 如果值是 Boolean 可以使用 Boolean 返回其 bool 值.
-// 否则返回 false
+/**
+如果值是 Boolean 可以使用 Boolean 返回其 bool 值.
+否则返回 false
+*/
 func (p *Value) Boolean() bool {
 	if !p.IsValid() || p.kind != Boolean {
 		return false
@@ -436,11 +495,13 @@ func (p *Value) Boolean() bool {
 	return p.v.(bool)
 }
 
-// 如果值是 Datetime 可以使用 Datetime 返回其 time.Time 值.
-// 否则返回 UTC 元年1月1日.
+/**
+如果值是 Datetime 可以使用 Datetime 返回其 time.Time 值.
+否则返回UTC时间公元元年1月1日 00:00:00. 可以用 IsZero() 进行判断.
+*/
 func (p *Value) Datetime() time.Time {
 	if !p.IsValid() || p.kind != Datetime {
-		return time.Unix(978307200-63113904000, 0).UTC()
+		return time.Time{}
 	}
 	return p.v.(time.Time)
 }
@@ -567,8 +628,11 @@ func (p *Value) DatetimeArray() []time.Time {
 
 // Len returns length for Array , typeArray.
 // Otherwise Kind return -1.
-// Len 返回数组类型元素个数.
-// 否则返回 -1.
+// +dl
+
+/**
+Len 返回数组类型元素个数. 否则返回 -1.
+*/
 func (p *Value) Len() int {
 	if p.IsValid() && p.kind >= StringArray && p.kind <= Array {
 		a, ok := p.v.([]*Value)
@@ -580,9 +644,15 @@ func (p *Value) Len() int {
 }
 
 // Index returns *Value for Array , typeArray.
+// idx negative available.
 // Otherwise Kind return nil.
-// Index 根据 idx 下标返回类型数组或二维数组对应的元素.
-// 如果非数组或者下标超出范围返回 nil.
+// +dl
+
+/**
+Index 根据 idx 下标返回类型数组或二维数组对应的元素.
+idx 可以用负数作为下标.
+如果非数组或者下标超出范围返回 nil.
+*/
 func (p *Value) Index(idx int) *Value {
 	if !p.IsValid() || p.kind < StringArray && p.kind > Array {
 		return nil
@@ -601,123 +671,87 @@ func (p *Value) Index(idx int) *Value {
 	return a[idx]
 }
 
-// Table are map container, Table are collections of key/value pairs.
+// for ArrayOfTables
+type Tables []Toml
 
-/**
-Table 是个 map 容器, 用来存储 TOML 规格定义中 Table 存储的 key/value 部分.
-注意:
-	因为注释的原因, TOML 中定义的 Table 在 tom-toml 中分成了 TableName 和 Table.
-*/
-type Table map[string]*Value
-
-// String 返回 Table 的 TOML 格式化字符串
-func (p Table) String() (pretty string) {
-	if len(p) == 0 {
-		return
+func (t Tables) Index(idx int) Toml {
+	if idx < len(t) {
+		return t[idx]
 	}
-	var keyidx []int
-	keys := map[int]string{}
-	for key, it := range p {
-		if it.IsValid() {
-			if it.kind < TableName {
-				keys[it.idx] = key
-				keyidx = append(keyidx, it.idx)
-			} else {
-				// panic ?
-			}
-		}
-	}
-
-	sort.Sort(sort.IntSlice(keyidx))
-
-	for _, i := range keyidx {
-		key := keys[i]
-		it := p[key]
-		if it == nil {
-			// panic(InternalError) ?
-			continue
-		}
-		it.key = key
-		pretty += it.string(1, 1)
-	}
-	return
+	return nil
 }
 
-func (p Table) Kind() Kind {
-	return TableBody
+func (t Tables) Len() int {
+	return len(t)
 }
 
-// Item 扩展自 Value, 支持 TableName 和 ArrayOfTables.
+// Item 扩展自 *Value,支持 ArrayOfTables.
 type Item struct {
-	Value
+	*Value
 }
 
 // 返回非安全的 *Value, 方便对 nil 对象操作
-func (p *Item) UnSafe() *Value {
-	if p == nil {
-		return nil
-	}
-	return &p.Value
+func (i Item) UnSafe() *Value {
+	return i.Value
 }
 
-// IsValid 返回 p 是否有效.
-func (p *Item) IsValid() bool {
-	return p != nil && p.Value.IsValid()
-}
-
-// AddTable 为 ArrayOfTables 增加新的 Table.
-func (p *Item) AddTable(ts Table) error {
-	if p == nil || ts == nil || p.kind != ArrayOfTables && p.kind != InvalidKind {
-		return NotSupported
-	}
-	if p.kind == InvalidKind {
-		p.v = []Table{}
-		p.kind = ArrayOfTables
-	}
-	aot, ok := p.v.([]Table)
-	if !ok {
-		return InternalError
-	}
-	p.v = append(aot, ts)
-	return nil
-}
-
-// DelTable 为 ArrayOfTables 删除下标为 idx 的元素.
-// 如果 idx 超出下标范围返回 OutOfRange 错误.
-// 如果存储了非法的数据会返回 InternalError 错误.
-func (p *Item) DelTable(idx int) error {
-	if !p.IsValid() || p.kind != ArrayOfTables {
-		return NotSupported
-	}
-	aot, ok := p.v.([]Table)
-	if !ok {
-		return InternalError
-	}
-	size := len(aot)
-	if idx < 0 {
-		idx = size + idx
-	}
-	if idx < 0 || idx >= size {
-		return OutOfRange
-	}
-	p.v = append(aot[:idx], aot[idx+1:]...)
-	return nil
-}
-
-// Index returns Table for ArrayOfTables.
-// Otherwise Kind return nil.
 /**
-Table 返回 ArrayOfTables 下标为 idx 的 Table.
-非 ArrayOfTables 返回 nil.
+如果是 ArrayOfTables 返回 Tables, 否则返回 nil.
+使用返回的 Tables 时, 注意其数组特性.
 */
-func (p *Item) Table(idx int) Table {
-	if !p.IsValid() || p.kind != ArrayOfTables {
+func (i Item) Tables() Tables {
+	if i.Value == nil || i.Value.v == nil || i.kind != ArrayOfTables {
 		return nil
 	}
-	aot, ok := p.v.([]Table)
+	t, ok := i.v.(Tables)
+	if ok {
+		return t
+	}
+	return nil
+}
+
+/**
+如果是 ArrayOfTables 追加 toml, 返回发生的错误.
+*/
+func (i Item) AddTable(tm Toml) error {
+	if i.Value == nil || i.Value.v == nil || i.kind != ArrayOfTables {
+		return NotSupported
+	}
+
+	if len(tm) == 0 {
+		return nil
+	}
+
+	if tm.safeId() <= i.idx {
+		return NotSupported
+	}
+
+	aot, ok := i.v.(Tables)
+	if !ok {
+		return InternalError
+	}
+
+	i.v = append(aot, tm)
+	return nil
+}
+
+// Index returns Toml for ArrayOfTables[idx].
+// Otherwise Kind return nil.
+// +dl
+
+/**
+如果是 ArrayOfTables 返回下标为 idx 的 Toml, 否则返回 nil.
+支持倒序下标.
+*/
+func (i Item) Table(idx int) Toml {
+	if i.Value == nil || i.Value.v == nil || i.kind != ArrayOfTables {
+		return nil
+	}
+	aot, ok := i.v.(Tables)
 	if !ok {
 		return nil
 	}
+
 	size := len(aot)
 	if idx < 0 {
 		idx = size + idx
@@ -728,30 +762,28 @@ func (p *Item) Table(idx int) Table {
 	return aot[idx]
 }
 
-// +doclang zh-cn
-// Len 返回数组类型的元素个数.
-// 否则返回 -1.
-
 // Len returns length for Array , typeArray , ArrayOfTables.
 // Otherwise Kind return -1.
-func (p *Item) Len() int {
-	if !p.IsValid() {
-		return -1
-	}
+// +dl
 
-	if p.kind == ArrayOfTables {
-		a, ok := p.v.([]Table)
+/**
+Len 返回数组类型的元素个数.
+否则返回 -1.
+*/
+func (i Item) Len() int {
+	if i.Value != nil && i.kind == ArrayOfTables {
+		a, ok := i.v.(Tables)
 		if ok {
 			return len(a)
 		}
 		return -1
 	}
-	return p.Value.Len()
+	return i.Value.Len()
 }
 
-// String 返回 *Item 存储数据的字符串表示.
+// String 返回 Item 存储数据的字符串表示.
 // 注意所有的规格定义都是可以字符串化的.
-func (p *Item) String() string {
+func (p Item) String() string {
 	if !p.IsValid() {
 		return ""
 	}
@@ -760,7 +792,7 @@ func (p *Item) String() string {
 
 // TomlString 返回用于格式化输出的字符串表示.
 // 与 String 不同, 输出包括了注释和缩进.
-func (p *Item) TomlString() string {
+func (p Item) TomlString() string {
 	if !p.IsValid() {
 		return ""
 	}
@@ -786,7 +818,7 @@ func FixComments(str string) string {
 	return re
 }
 
-func (p *Item) string(layout int, indent int) (pretty string) {
+func (p Item) string(layout int, indent int) (pretty string) {
 	if !p.IsValid() {
 		return
 	}
@@ -796,32 +828,32 @@ func (p *Item) string(layout int, indent int) (pretty string) {
 	p.MultiComments = FixComments(p.MultiComments)
 	p.EolComment = FixComments(p.EolComment)
 	pretty = p.MultiComments
-	// Item is comment?
-	if p.v == nil && p.kind < TableName {
-		return
-	}
-	aot, ok := p.v.([]Table)
+
+	aot, ok := p.v.(Tables)
+
 	if !ok {
 		panic(InternalError)
 	}
+
 	indents := ""
 	if indent > 0 {
 		indents = strings.Repeat("\t", indent)
 	}
+
 	tn := indents + "[[" + p.key + "]]"
 
-	for i, ts := range aot {
+	for i, tm := range aot {
 
 		if i == 0 {
 			if layout == 0 {
 				pretty += tn
 			} else {
-				pretty += p.Value.comments(tn, layout, indent)
+				pretty += p.comments(tn, layout, indent)
 			}
 		} else {
 			pretty += "\n" + tn
 		}
-		pretty += ts.String()
+		pretty += tm.string(indent+1, 0)
 	}
 	return
 }
@@ -844,12 +876,7 @@ func (p *Value) string(layout int, indent int) string {
 	case Boolean:
 		s = strconv.FormatBool(p.v.(bool))
 	case Datetime:
-		if layout == 0 {
-			s = p.v.(time.Time).Format("2006-01-02 15:04:05")
-		} else {
-			s = p.v.(time.Time).Format(time.RFC3339)
-		}
-
+		s = p.v.(time.Time).Format("2006-01-02T15:04:05Z") // ISO 8601
 	case StringArray, IntegerArray, FloatArray, BooleanArray, DatetimeArray:
 		return p.typeArrayString(layout, indent)
 	case Array:
@@ -872,10 +899,12 @@ func (p *Value) string(layout int, indent int) string {
 func (p *Value) comments(v string, layout int, indent int) string {
 	ts := layout&1 == 1 // toml string
 	key := p.key
+
 	indents := ""
-	if ts && indent >= 0 {
+	if ts && indent > 0 {
 		indents = strings.Repeat("\t", indent)
 	}
+
 	p.MultiComments = FixComments(p.MultiComments)
 	p.EolComment = FixComments(p.EolComment)
 	if ts && len(key) != 0 {
@@ -898,12 +927,10 @@ func (p *Value) comments(v string, layout int, indent int) string {
 	}
 
 	if ts && len(p.MultiComments) != 0 {
-		if len(key) == 0 {
-			v = "\n" + strings.Replace(p.MultiComments, "#", indents+"#", -1) +
-				"\n" + indents + v
-		} else {
-			v = "\n" + strings.Replace(p.MultiComments, "#", indents+"#", -1) +
-				"\n" + v
+		v = "\n" + strings.Replace(p.MultiComments, "#", indents+"#", -1) +
+			"\n" + v
+		if p.kind != TableName {
+			v = "\n" + v
 		}
 	}
 	if layout>>1 == 1 {
@@ -938,7 +965,7 @@ func (p *Value) typeArrayString(layout int, indent int) string {
 	return "[" + s + "]"
 }
 
-func (it *Item) Apply(dst interface{}) (count int) {
+func (it Item) Apply(dst interface{}) (count int) {
 	if !it.IsValid() {
 		return
 	}

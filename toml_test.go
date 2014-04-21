@@ -1,7 +1,6 @@
 package toml
 
 import (
-	"fmt"
 	"github.com/achun/testing-want"
 	"testing"
 	"time"
@@ -10,16 +9,171 @@ import (
 func TestTomlFile(t *testing.T) {
 	wt := want.T(t)
 	tm, err := LoadFile("tests/example.toml")
-
 	wt.Nil(err)
-	wt.Equal(tm["servers.alpha.ip"].String(), "10.0.0.1")
-	wt.Equal(tm["servers.beta.ip"].String(), "10.0.0.2")
+	wantExample(wt, tm)
+	source := tm.String()
+	testBuilder(wt, []byte(source), "TestTomlFile tm.String()")
+	println(source)
+}
 
-	tm2, err := Parse([]byte(tm.String()))
-	wt.Nil(err)
+func wantExample(wt want.Want, tm Toml) {
+	it := tm["title"]
+	wt.Equal(it.Kind(), String)
+	wt.Equal(it.MultiComments, "# This is a TOML document. Boom.")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.String(), "TOML Example")
 
-	wt.Equal(tm["servers.alpha.ip"].String(), tm2["servers.alpha.ip"].String())
-	wt.Equal(tm["servers.alpha.dc"].String(), tm2["servers.alpha.dc"].String())
+	it = tm["owner"]
+	wt.Equal(it.Kind(), TableName)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "# owner information")
+
+	it = tm["owner.name"]
+	wt.Equal(it.Kind(), String)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.String(), "Tom Preston-Werner")
+
+	it = tm["owner.organization"]
+	wt.Equal(it.Kind(), String)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.String(), "GitHub")
+
+	it = tm["owner.bio"]
+	wt.Equal(it.Kind(), String)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.String(), "GitHub Cofounder & CEO\nLikes tater tots and beer.")
+
+	it = tm["owner.dob"]
+	wt.Equal(it.Kind(), Datetime)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "# First class dates? Why not?")
+	wt.Equal(it.String(), "1979-05-27T07:32:00Z")
+	wt.Equal(it.Datetime().Format("2006-01-02T15:04:05Z00:00"), "1979-05-27T07:32:00Z00:00")
+
+	it = tm["database"]
+	wt.Equal(it.Kind(), TableName)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+
+	it = tm["database.server"]
+	wt.Equal(it.Kind(), String)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.String(), "192.168.1.1")
+
+	it = tm["database.ports"]
+	wt.Equal(it.Kind(), IntegerArray, it.kind)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.Len(), 3)
+	wt.Equal(it.Index(0).Interger(), 8001)
+	wt.Equal(it.Index(1).Interger(), 8001)
+	wt.Equal(it.Index(2).Interger(), 8002)
+
+	it = tm["database.connection_max"]
+	wt.Equal(it.Kind(), Integer)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.Interger(), 5000)
+
+	it = tm["database.enabled"]
+	wt.Equal(it.Kind(), Boolean, it.kind)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.Boolean(), true)
+
+	it = tm["servers"]
+	wt.Equal(it.Kind(), TableName, it.kind)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+
+	it = tm["servers.alpha"]
+	wt.Equal(it.Kind(), TableName, it.kind)
+	wt.Equal(it.MultiComments, "# You can indent as you please. Tabs or spaces. TOML don't care.")
+	wt.Equal(it.EolComment, "")
+
+	it = tm["servers.alpha.ip"]
+	wt.Equal(it.Kind(), String, it.kind)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.String(), "10.0.0.1")
+
+	it = tm["servers.alpha.dc"]
+	wt.Equal(it.Kind(), String)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.String(), "eqdc10")
+
+	it = tm["servers.beta"]
+	wt.Equal(it.Kind(), TableName)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+
+	it = tm["servers.beta.ip"]
+	wt.Equal(it.Kind(), String)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.String(), "10.0.0.2")
+
+	it = tm["servers.beta.dc"]
+	wt.Equal(it.Kind(), String)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.String(), "eqdc10")
+
+	it = tm["servers.beta.country"]
+	wt.Equal(it.Kind(), String)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "# This should be parsed as UTF-8")
+	wt.Equal(it.String(), "中国")
+
+	it = tm["clients"]
+	wt.Equal(it.Kind(), TableName)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "")
+
+	it = tm["clients.data"]
+	wt.Equal(it.Kind(), Array)
+	wt.Equal(it.MultiComments, "")
+	wt.Equal(it.EolComment, "# just an update to make sure parsers support it")
+	wt.Equal(it.Len(), 2)
+
+	iv := it.Index(0)
+	wt.Equal(iv.Kind(), StringArray)
+	wt.Equal(iv.Len(), 2)
+	wt.Equal(iv.Index(0).Kind(), String)
+	wt.Equal(iv.Index(1).Kind(), String)
+	wt.Equal(iv.Index(0).String(), "gamma")
+	wt.Equal(iv.Index(1).String(), "delta")
+
+	iv = it.Index(1)
+	wt.Equal(iv.Kind(), IntegerArray, iv.kind)
+	wt.Equal(iv.Len(), 2)
+	wt.Equal(iv.Index(0).Kind(), Integer)
+	wt.Equal(iv.Index(1).Kind(), Integer)
+	wt.Equal(iv.Index(0).Interger(), 1)
+	wt.Equal(iv.Index(1).Interger(), 2)
+
+	it = tm["clients.hosts"]
+	wt.Equal(it.Kind(), StringArray)
+	wt.Equal(it.MultiComments, "# Line breaks are OK when inside arrays")
+	wt.Equal(it.EolComment, "")
+	wt.Equal(it.Len(), 2)
+	wt.Equal(it.Index(0).Kind(), String)
+	wt.Equal(it.Index(1).Kind(), String)
+	wt.Equal(it.Index(0).String(), "alpha")
+	wt.Equal(it.Index(1).String(), "omega")
+
+	it = tm["products"]
+	wt.Equal(it.Kind(), ArrayOfTables)
+	wt.Equal(it.Len(), 2)
+
+	ts := it.Tables()
+	wt.Equal(ts.Len(), 2)
+
 }
 
 func TestTomlEmpty(t *testing.T) {
@@ -27,192 +181,7 @@ func TestTomlEmpty(t *testing.T) {
 	tm, err := Parse([]byte(``))
 
 	wt.Nil(err)
-	wt.Equal(len(tm), 0)
-}
-
-func TestToml(t *testing.T) {
-	tm := testToml(t, testData[0], testData[1:])
-	beautiful := tm.String()
-	testToml(t, beautiful, testData[1:])
-}
-func testToml(t *testing.T, source string, as []string) Toml {
-	wt := want.T(t)
-	tm := assertToml(t, source, as)
-
-	ia := tm[""]
-	wt.True(ia != nil, "LastComments invalid")
-	wt.Equal(ia.MultiComments, "# LastComments", "LastComments")
-
-	ia = tm["multiline.ia"]
-	wt.True(ia != nil, "multiline.ia.Value invalid")
-	wt.Equal(ia.EolComment, "# 10.2", "multiline.ia.EolComment")
-
-	wt.Equal(ia.Index(0).MultiComments, "# 10.1", "multiline.ia·Index[0].MultiComments")
-	wt.Equal(ia.Index(1).EolComment, "# 10", "multiline.ia·Index[1].EolComment")
-
-	ia = tm["arrayarray.2.ia"]
-	wt.True(ia != nil, "arrayarray.2.ia invalid")
-
-	wt.Equal(ia.Index(0).String(), "[1,2]", "arrayarray.2.ia·Index(0)")
-	wt.Equal(ia.Index(0).EolComment, "# 11", "arrayarray.2.ia·Index(0).EolComment")
-
-	aot := tm["ArrayOfTables"]
-	wt.True(aot != nil, "ArrayOfTables invalid")
-	wt.Equal(aot.kind, ArrayOfTables)
-	wt.Equal(aot.Len(), 2, "ArrayOfTables Len")
-
-	ts := aot.Table(0)
-
-	wt.True(ts != nil, "ArrayOfTables.Index(0) invalid")
-	wt.Equal(ts["ia"].Int(), int64(1), "ArrayOfTables.Index(0).ia")
-	wt.Equal(ts["aa"].String(), "name", "ArrayOfTables.Index(0).aa")
-
-	ts = aot.Table(1)
-	wt.Equal(ts["ia"].Int(), int64(2), "ArrayOfTables.Index(1).ia")
-	wt.Equal(ts["aa"].String(), "jack", "ArrayOfTables.Index(1).aa")
-
-	sa := ts["sa"]
-	wt.True(sa.IsValid(), "ArrayOfTables.Index(1).sa invalid")
-	wt.Equal(sa.kind, StringArray)
-	wt.Equal(sa.Len(), 3)
-	wt.Equal(sa.String(), `["str1","","str2"]`, "ArrayOfTables.Index(1).sa")
-	wt.Equal(sa.Index(0).String(), "str1")
-	return tm
-}
-
-func assertToml(t *testing.T, source string, as []string) (tm Toml) {
-	wt := want.T(t)
-	tm, err := Parse([]byte(source))
-	wt.Nil(err)
-
-	for i := 0; i < len(as); i += 3 {
-		path := as[i]
-		fn := as[i+1]
-		re := as[i+2]
-		it := tm[path]
-
-		if it != nil && it.kind == ArrayOfTables {
-			ts := it.Table(0)
-			if ts == nil {
-				t.Fatal(path, it)
-			}
-
-			it = &Item{*ts[as[i+3]]}
-			i++
-		}
-		s := ""
-		if !it.IsValid() {
-			t.Fatalf("\n%v %v :\n%#v\n%#v\n", path, fn, re, it)
-		}
-		switch fn {
-		case "fc":
-			s = it.MultiComments
-		case "ec":
-			s = it.EolComment
-		case "i":
-			s = fmt.Sprint(it.Int())
-		case "f":
-			s = fmt.Sprint(it.Float())
-		case "b":
-			s = fmt.Sprint(it.Boolean())
-		case "d":
-			s = fmt.Sprint(it.Datetime())
-		case "s":
-			s = fmt.Sprint(it.String())
-		case "k":
-			s = fmt.Sprint(kindsName[it.kind])
-		case "ts":
-			s = fmt.Sprint(it.TomlString())
-		default:
-			t.Fatal("invalid want:", fn)
-		}
-		if s != re {
-			t.Fatalf("\n%v %v :\n%#v\n%#v\n", path, fn, re, s)
-		}
-	}
-	return
-}
-
-var testData = []string{
-	`
-		# comment 0
-		# comment 00
-
-		key = "first key"
-			# 1
-		# 2
-		[table] # 3
-		int = 123456 # 4
-		str = "string"
-		
-		[table2] # 5
-			true = true
-			false = false
-			float = 123.45
-			datetime = 2012-01-02T13:11:14Z
-		
-		# 6
-			ia = [ 1 , 2] # 7
-		# 8 overwrite 6
-			ia = [ 1, 2,3] # 9 overwrite 7
-		
-			ba=[true,false]
-
-			sa=["str1","","str2"]
-		
-		[multiline]
-			ia= [ # 10.2
-			# 10.1
-			1,
-				2, # 10
-			3,
-			] # 10.2
-		[arrayarray]
-			ia=[[1,2]]
-		[arrayarray.2]
-			ia = [
-				[1,2], # 11
-				[true],
-			]
-		[[ArrayOfTables]]
-			ia=1
-			aa="name"
-		[[ArrayOfTables]]
-			ia=2
-			aa="jack"
-			sa=["str1","","str2"]
-	# LastComments`,
-
-	"key", "fc", "# comment 0\n# comment 00",
-	"key", "ts", "\n# comment 0\n# comment 00\nkey = \"first key\"",
-
-	"table", "fc", "# 1\n# 2",
-	"table", "ec", "# 3",
-
-	"table.int", "i", "123456",
-	"table.int", "ec", "# 4",
-	"table.str", "s", "string",
-
-	"table2", "ec", "# 5",
-	"table2.true", "b", "true",
-	"table2.false", "b", "false",
-	"table2.float", "f", "123.45",
-	"table2.datetime", "ts", "\ndatetime = 2012-01-02T13:11:14Z",
-	"table2.datetime", "s", "2012-01-02 13:11:14",
-
-	"table2.ia", "s", "[1,2,3]",
-	"table2.ia", "fc", "# 8 overwrite 6",
-	"table2.ia", "ec", "# 9 overwrite 7",
-
-	"table2.ba", "s", "[true,false]",
-	"table2.sa", "s", `["str1","","str2"]`,
-
-	"multiline.ia", "s", "[1,2,3]",
-	"multiline.ia", "ts", "\nia = [\n\t# 10.1\n\t1,2, # 10\n\t3] # 10.2",
-
-	"arrayarray.ia", "s", "[[1,2]]",
-	"arrayarray.2.ia", "s", "[[1,2],[true]]",
-	"arrayarray.2.ia", "ts", "\nia = [[1,2], # 11\n\t[true]]",
+	wt.Equal(len(tm), 1) // was iD
 }
 
 var testDat = `

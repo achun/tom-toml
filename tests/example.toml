@@ -2,7 +2,7 @@
 
 title = "TOML Example"
 
-[owner]
+[owner] # owner information
 name = "Tom Preston-Werner"
 organization = "GitHub"
 bio = "GitHub Cofounder & CEO\nLikes tater tots and beer."
@@ -45,3 +45,23 @@ hosts = [
   name = "Nail"
   sku = 284758393
   color = "gray"
+
+# nested
+[[fruit]]
+  name = "apple"
+
+  [fruit.physical]
+    color = "red"
+    shape = "round"
+
+  [[fruit.variety]]
+    name = "red delicious"
+
+  [[fruit.variety]]
+    name = "granny smith"
+
+[[fruit]]
+  name = "banana"
+
+  [[fruit.variety]]
+    name = "plantain"
