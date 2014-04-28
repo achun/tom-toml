@@ -79,36 +79,43 @@ func counter(idx int) int {
 	return _counter
 }
 
-// MakeItem 函数返回一个新 Item.
-// 为保持格式化输出次序, MakeItem 内部使用了一个计数器.
+// GenItem 函数返回一个新 Item.
+// 为保持格式化输出次序, GenItem 内部使用了一个计数器.
 // 使用者应该使用该函数来得到新的 Item. 而不是用 new(Item) 获得.
 // 那样的话就无法保持格式化输出次序.
-func MakeItem(kind Kind) Item {
+func GenItem(kind Kind) Item {
 	if kind < 0 || kind > ArrayOfTables {
 		panic(NotSupported)
 	}
 
 	it := Item{}
 	it.Value = &Value{}
+	it.multiComments = []string{}
 	it.kind = kind
 
 	it.idx = counter(0)
 
 	if kind == ArrayOfTables {
-		it.v = Tables{}
+		it.v = TomlArray{}
 	}
 
 	return it
 }
 
+type aString []string
+
+func (s aString) String() string {
+	return strings.Join(s, "\n")
+}
+
 // Value 用来存储 String 至 Array 的值.
 type Value struct {
 	kind          Kind
-	v             interface{}
-	MultiComments string // Multi-line comments
-	EolComment    string // end of line comment
-	key           string // cached key name for TOML formatter
 	idx           int
+	v             interface{}
+	eolComment    string  // end of line comment
+	multiComments aString // Multi-line comments
+	//key           string  // cached key name for TOML formatter
 }
 
 // NewValue 函数返回一个新 *Value.
@@ -122,10 +129,53 @@ func NewValue(kind Kind) *Value {
 
 	it := &Value{}
 	it.kind = kind
+	it.multiComments = []string{}
 
 	it.idx = counter(0)
 
 	return it
+}
+
+// returns multiline comments
+func (p *Value) Comments() []string {
+	return append([]string{}, p.multiComments...)
+}
+
+// returns end-of-line comment
+func (p *Value) Comment() string {
+	return p.eolComment
+}
+
+// set multiline comments
+func (p *Value) SetComments(as []string) {
+	c := []string{}
+	for _, s := range as {
+		if strings.IndexAny(s, "\n\r\x1E") >= 0 {
+			return
+		}
+
+		s = strings.TrimSpace(s)
+		if s != "" && s[0] != '#' {
+			s = "# " + s
+		}
+		c = append(c, s)
+	}
+	p.multiComments = c
+	return
+}
+
+// set end-of-line comment
+func (p *Value) SetComment(s string) {
+	if strings.IndexAny(s, "\n\r\x1E") >= 0 {
+		return
+	}
+
+	s = strings.TrimSpace(s)
+	if s != "" && s[0] != '#' {
+		s = "# " + s
+	}
+
+	p.eolComment = s
 }
 
 // Kind 返回数据的风格.
@@ -137,8 +187,8 @@ func (p *Value) Kind() Kind {
 }
 
 /**
-Id 返回 int 值, 此值表示 p 在运行期中的唯一序号, 按生成次序.
-返回 0 表示该 p 无效.
+Id 返回 int 值, 此值表示 Value 在运行期中生成次序的唯一序号.
+返回 0 表示该 Value 无效.
 */
 func (p *Value) Id() int {
 	if !p.IsValid() {
@@ -431,17 +481,11 @@ func (p *Value) Add(ai ...interface{}) error {
 // String 返回 *Value 存储数据的字符串表示.
 // 注意所有的规格定义都是可以字符串化的.
 func (p *Value) String() string {
-	return p.string(0, 0)
-}
-
-// TomlString 返回用于格式化输出的字符串表示.
-// 与 String 不同, 输出包括了注释和缩进.
-func (p *Value) TomlString() string {
-	return p.string(1, 0)
+	return p.string("", 0)
 }
 
 /**
-如果值是 Interger 可以使用 Int 返回其 int64 值.
+如果值是 Integer 可以使用 Int 返回其 int64 值.
 否则返回 0
 */
 func (p *Value) Int() int64 {
@@ -452,10 +496,10 @@ func (p *Value) Int() int64 {
 }
 
 /**
-如果值是 Interger 可以使用 Int 返回其 int 值.
+如果值是 Integer 可以使用 Integer 返回其 int 值.
 否则返回 0
 */
-func (p *Value) Interger() int {
+func (p *Value) Integer() int {
 	if !p.IsValid() || p.kind != Integer {
 		return 0
 	}
@@ -463,7 +507,18 @@ func (p *Value) Interger() int {
 }
 
 /**
-如果值是 Interger 可以使用 UInt 返回其 uint64 值.
+如果值是 Integer 可以使用 UInteger 返回其 uint 值.
+否则返回 0. 注意此方法不检查值是否为负数.
+*/
+func (p *Value) UInteger() uint {
+	if !p.IsValid() || p.kind != Integer {
+		return 0
+	}
+	return uint(p.v.(int64))
+}
+
+/**
+如果值是 Integer 可以使用 UInt 返回其 uint64 值.
 否则返回 0
 */
 func (p *Value) UInt() uint64 {
@@ -672,16 +727,16 @@ func (p *Value) Index(idx int) *Value {
 }
 
 // for ArrayOfTables
-type Tables []Toml
+type TomlArray []Toml
 
-func (t Tables) Index(idx int) Toml {
+func (t TomlArray) Index(idx int) Toml {
 	if idx < len(t) {
 		return t[idx]
 	}
 	return nil
 }
 
-func (t Tables) Len() int {
+func (t TomlArray) Len() int {
 	return len(t)
 }
 
@@ -690,20 +745,15 @@ type Item struct {
 	*Value
 }
 
-// 返回非安全的 *Value, 方便对 nil 对象操作
-func (i Item) UnSafe() *Value {
-	return i.Value
-}
-
 /**
-如果是 ArrayOfTables 返回 Tables, 否则返回 nil.
-使用返回的 Tables 时, 注意其数组特性.
+如果是 ArrayOfTables 返回 TomlArray, 否则返回 nil.
+使用返回的 TomlArray 时, 注意其数组特性.
 */
-func (i Item) Tables() Tables {
+func (i Item) TomlArray() TomlArray {
 	if i.Value == nil || i.Value.v == nil || i.kind != ArrayOfTables {
 		return nil
 	}
-	t, ok := i.v.(Tables)
+	t, ok := i.v.(TomlArray)
 	if ok {
 		return t
 	}
@@ -722,11 +772,11 @@ func (i Item) AddTable(tm Toml) error {
 		return nil
 	}
 
-	if tm.safeId() <= i.idx {
+	if tm.Id().idx <= i.idx {
 		return NotSupported
 	}
 
-	aot, ok := i.v.(Tables)
+	aot, ok := i.v.(TomlArray)
 	if !ok {
 		return InternalError
 	}
@@ -747,7 +797,7 @@ func (i Item) Table(idx int) Toml {
 	if i.Value == nil || i.Value.v == nil || i.kind != ArrayOfTables {
 		return nil
 	}
-	aot, ok := i.v.(Tables)
+	aot, ok := i.v.(TomlArray)
 	if !ok {
 		return nil
 	}
@@ -772,7 +822,7 @@ Len 返回数组类型的元素个数.
 */
 func (i Item) Len() int {
 	if i.Value != nil && i.kind == ArrayOfTables {
-		a, ok := i.v.(Tables)
+		a, ok := i.v.(TomlArray)
 		if ok {
 			return len(a)
 		}
@@ -781,188 +831,75 @@ func (i Item) Len() int {
 	return i.Value.Len()
 }
 
-// String 返回 Item 存储数据的字符串表示.
-// 注意所有的规格定义都是可以字符串化的.
-func (p Item) String() string {
+// Value 的 string, 只考虑 layout, 不考虑上层的缩进关系.
+// indent 是专门为 typeArrayString 留的. 这样做可以简化代码.
+func (p *Value) string(indent string, layout int) string {
 	if !p.IsValid() {
 		return ""
 	}
-	return p.string(0, 0)
-}
 
-// TomlString 返回用于格式化输出的字符串表示.
-// 与 String 不同, 输出包括了注释和缩进.
-func (p Item) TomlString() string {
-	if !p.IsValid() {
-		return ""
-	}
-	return p.string(1, 0)
-}
-
-// 对完整注释字符串进行修正, 修正后的多行字符串使用换行符 "\n".
-
-// FixComments returns comments, newline equal "\n"
-func FixComments(str string) string {
-	as := strings.Split(str, "#")
-	re := ""
-	for _, s := range as {
-		s = strings.TrimSpace(s)
-		if len(s) != 0 {
-			if len(re) != 0 {
-				re += "\n# " + s
-			} else {
-				re += "# " + s
-			}
-		}
-	}
-	return re
-}
-
-func (p Item) string(layout int, indent int) (pretty string) {
-	if !p.IsValid() {
-		return
-	}
-	if p.kind != ArrayOfTables {
-		return p.Value.string(layout, indent)
-	}
-	p.MultiComments = FixComments(p.MultiComments)
-	p.EolComment = FixComments(p.EolComment)
-	pretty = p.MultiComments
-
-	aot, ok := p.v.(Tables)
-
-	if !ok {
-		panic(InternalError)
-	}
-
-	indents := ""
-	if indent > 0 {
-		indents = strings.Repeat("\t", indent)
-	}
-
-	tn := indents + "[[" + p.key + "]]"
-
-	for i, tm := range aot {
-
-		if i == 0 {
-			if layout == 0 {
-				pretty += tn
-			} else {
-				pretty += p.comments(tn, layout, indent)
-			}
-		} else {
-			pretty += "\n" + tn
-		}
-		pretty += tm.string(indent+1, 0)
-	}
-	return
-}
-
-func (p *Value) string(layout int, indent int) string {
-	if !p.IsValid() {
-		return ""
-	}
-	s := ""
 	switch p.kind {
 	case String:
-		s = p.v.(string)
-		if layout != 0 {
-			s = strconv.Quote(s)
+		if layout == 0 {
+			return p.v.(string)
+		} else {
+			return strconv.Quote(p.v.(string))
 		}
 	case Integer:
-		s = strconv.FormatInt(p.v.(int64), 10)
+		return strconv.FormatInt(p.v.(int64), 10)
 	case Float:
-		s = strconv.FormatFloat(p.v.(float64), 'f', -1, 64)
+		return strconv.FormatFloat(p.v.(float64), 'f', -1, 64)
 	case Boolean:
-		s = strconv.FormatBool(p.v.(bool))
+		return strconv.FormatBool(p.v.(bool))
 	case Datetime:
-		s = p.v.(time.Time).Format("2006-01-02T15:04:05Z") // ISO 8601
+		return p.v.(time.Time).Format("2006-01-02T15:04:05Z") // ISO 8601
+
 	case StringArray, IntegerArray, FloatArray, BooleanArray, DatetimeArray:
-		return p.typeArrayString(layout, indent)
+		return p.typeArrayString(indent, 1)
 	case Array:
-		return p.typeArrayString(layout, indent)
-	case TableName:
-		indents := ""
-		if indent > 0 {
-			indents = strings.Repeat("\t", indent)
-		}
-		s = indents + "[" + p.key + "]"
-	default:
-		panic(InternalError)
+		return p.typeArrayString(indent, 1)
+		/*
+			case TableName:
+				return "[]"
+			case ArrayOfTables:
+				return "[[" + p.key + "]]"
+			default:
+				return InvalidItem.Error()
+		*/
 	}
-	if layout != 0 {
-		return p.comments(s, layout, indent)
-	}
-	return s
+	return ""
 }
 
-func (p *Value) comments(v string, layout int, indent int) string {
-	ts := layout&1 == 1 // toml string
-	key := p.key
-
-	indents := ""
-	if ts && indent > 0 {
-		indents = strings.Repeat("\t", indent)
-	}
-
-	p.MultiComments = FixComments(p.MultiComments)
-	p.EolComment = FixComments(p.EolComment)
-	if ts && len(key) != 0 {
-		if p.kind < TableName {
-			key = indents + key + " = "
-		} else {
-			key = ""
-		}
-		if ts && len(p.MultiComments) == 0 {
-			v = "\n" + key + v
-		} else if key == "" {
-			//v = v
-		} else {
-			v = key + v
-		}
-	}
-
-	if ts && layout>>1 == 1 { // element of array
-		indents += "\t"
-	}
-
-	if ts && len(p.MultiComments) != 0 {
-		v = "\n" + strings.Replace(p.MultiComments, "#", indents+"#", -1) +
-			"\n" + v
-		if p.kind != TableName {
-			v = "\n" + v
-		}
-	}
-	if layout>>1 == 1 {
-		v += ","
-	}
-
-	if ts && len(p.EolComment) != 0 {
-		v += " " + p.EolComment
-		if layout>>1 > 0 {
-			v += "\n" + indents
-		}
-	}
-
-	return v
-}
-
-func (p *Value) typeArrayString(layout int, indent int) string {
+// typeArray 比较特殊, 单独处理缩进问题
+func (p *Value) typeArrayString(indent string, layout int) string {
 	a := p.v.([]*Value)
-	s := ""
+	fmt := ""
 	max := len(a) - 1
-	nlayout := layout & 1
-	for i, bv := range a {
+	for i, it := range a {
+
+		if !it.IsValid() {
+			return InvalidItem.Error()
+		}
+
+		if layout == 1 && len(it.multiComments) != 0 {
+			fmt += "\n"
+			for _, s := range it.multiComments {
+				fmt += indent + s + "\n"
+			}
+		}
+
 		if i != max {
-			s += bv.string(nlayout|2, indent) // for "," # comment
+			fmt += it.string(indent, layout) + ", "
 		} else {
-			s += bv.string(nlayout|6, indent)
+			fmt += it.string(indent, layout)
+		}
+
+		if layout == 1 && it.eolComment != "" {
+			fmt += it.eolComment + "\n" + indent
 		}
 	}
-	if layout != 0 {
-		return p.comments("["+s+"]", layout, indent)
-	}
-	return "[" + s + "]"
+
+	return "[" + fmt + "]"
 }
 
 func (it Item) Apply(dst interface{}) (count int) {

@@ -10,18 +10,18 @@ type Status int
 
 const (
 	SNot Status = iota
+	SInvalid
 	SMaybe
 	SYes
-	SInvalid
-	SYesSkip // SYes 并且多读了一个字符
+	SYesKeep // SYes 并且多读了一个字符, 保持当前的字符给后续解析
 )
 
 var statusName = [...]string{
 	"SNot",
+	"SInvalid",
 	"SMaybe",
 	"SYes",
-	"SInvalid",
-	"SYesSkip",
+	"SYesKeep",
 }
 
 func (t Status) String() string {
@@ -59,10 +59,11 @@ const (
 )
 
 func (t Token) String() string {
-	if int(t) >= len(tokensName) {
-		return fmt.Sprint(t)
+	i := int(t)
+	if i < 0 || i >= len(tokensName) {
+		return "User defined error: " + fmt.Sprint(i)
 	}
-	return tokensName[t]
+	return tokensName[i]
 }
 
 var tokensName = [...]string{
@@ -89,79 +90,98 @@ var tokensName = [...]string{
 }
 
 type TokenHandler func(Token, string) error
-type receptor func(parser) receptor
-
-// flag 的类型是复用的, 只有 Status == SYes 的时候才表示是 Token.
-// 否则表示的是下一次传入的状态
-type tokenFn func(r rune, flag Token, maybe bool) (Status, Token)
 
 type parser interface {
 	Scanner
-	Token(token Token) error
-	NotMatch(token Token)
-	Invalid(token Token)
-	Unexpected(token Token)
-	ArrayDimensions(add int) int
 	Handler(TokenHandler)
-	Skip()
-	IsSkip() bool
+
 	Run()
+	Keep()
+	IsTestMode() bool
+
+	Token(token Token) error
+	Invalid(token Token)
+	NotMatch(token ...Token)
+	Unexpected(token Token)
 }
 
 type parse struct {
 	Scanner
-	arrayDimensions int
-	err             error
-	handler         TokenHandler
-	skip            bool
+	err      error
+	handler  TokenHandler
+	next     bool
+	testMode bool // 测试模式允许不完整的 stage
 }
+
+func (p *parse) Close() {}
 
 func (p *parse) Run() {
-	// first skip, Scanner pre-readed one runc, always
-	// Scanner 总是预先读取了第一个字符
-	p.skip = true
-	r := recEmpty(p)
-	for r != nil {
-		r = r(p)
+	stagePlay(p, openStage())
+}
+
+func (p *parse) IsTestMode() bool {
+	return p.testMode
+}
+
+func (p *parse) Rune() rune {
+	if p.next {
+		return p.Scanner.Next()
 	}
+	p.next = true
+	return p.Scanner.Rune()
 }
 
-func (p *parse) IsSkip() bool {
-	skip := p.skip
-	p.skip = false
-	return skip
+func (p *parse) Next() rune {
+	return p.Rune()
 }
 
-func (p *parse) Skip() {
-	p.skip = true
+func (p *parse) Keep() {
+	p.next = false
 }
 
-func (p *parse) NotMatch(token Token) {
-	p.err = errors.New("incomplete " + tokensName[token])
+func (p *parse) NotMatch(token ...Token) {
+	var msg string
+	if len(token) == 1 {
+		msg = "incomplete"
+	} else {
+		msg = "no one can match for"
+	}
+
+	for _, t := range token {
+		msg += " " + t.String()
+	}
+
+	p.err = errors.New(msg)
 	p.Token(tokenError)
 }
+
 func (p *parse) Invalid(token Token) {
 	p.err = errors.New("invalid " + tokensName[token])
 	p.Token(tokenError)
 }
+
 func (p *parse) Unexpected(token Token) {
 	p.err = errors.New("unexpected token " + tokensName[token])
 	p.Token(tokenError)
 }
+
 func (p *parse) Token(token Token) (err error) {
 	var str string
 	if token == tokenError {
+		if p.err == nil {
+			p.err = errors.New("invalid format.")
+		}
 		err = p.err
 		str = err.Error()
 	} else {
-		str = p.Fetch(!p.skip)
+		str = p.Scanner.Fetch(p.next)
 		if token != tokenEOF && token != tokenWhitespace {
 			str = strings.TrimSpace(str)
 		}
 	}
 
 	if p.handler == nil {
-		fmt.Println(tokensName[token], str)
+		fmt.Println(token.String(), str)
 	} else {
 		if token == tokenError {
 			p.handler(token, str)
@@ -179,389 +199,12 @@ func (p *parse) Token(token Token) (err error) {
 func (p *parse) Handler(h TokenHandler) {
 	p.handler = h
 }
-func (p *parse) ArrayDimensions(add int) int {
-	if add < 0 {
-		add = -1
-	}
-	if add > 0 {
-		add = 1
-	}
-	p.arrayDimensions += add
-	return p.arrayDimensions
-}
-
-var tokensEmpty, tokensEqual, tokensTable, tokensArrayOfTables,
-	tokensValues,
-	tokensArray,
-	tokensStringArray,
-	tokensBooleanArray,
-	tokensIntegerArray,
-	tokensFloatArray,
-	tokensDatetimeArray []tokenFn
-
-var stateEmpty, stateEqual, stateTable, stateArrayOfTables,
-	stateValues,
-	stateArray,
-	stateStringArray,
-	stateBooleanArray,
-	stateIntegerArray,
-	stateFloatArray,
-	stateDatetimeArray []receptor
-
-func init() {
-
-	tokensEmpty = []tokenFn{
-		itsWhitespace,    // recEmpty
-		itsNewLine,       // recEmpty
-		itsComment,       // recEmpty
-		itsTableName,     // recTable
-		itsArrayOfTables, // recArrayOfTables
-		itsKey,           // recEqual
-	}
-	stateEmpty = []receptor{
-		recEmpty,         // itsWhitespace
-		recEmpty,         // itsNewLine
-		recEmpty,         // itsComment
-		recEmpty,         // itsTableName
-		recArrayOfTables, // itsArrayOfTables
-		recEqual,         // itsKey
-	}
-
-	tokensEqual = []tokenFn{
-		itsWhitespace, // recEqual
-		itsEqual,      // recValues
-	}
-	stateEqual = []receptor{
-		recEqual,  // itsWhitespace
-		recValues, // itsEqual
-		recNotMatch(tokenEqual),
-	}
-
-	tokensTable = []tokenFn{
-		itsWhitespace,    // recEmpty
-		itsComment,       // recEmpty
-		itsNewLine,       // recEmpty
-		itsTableName,     // recTable
-		itsArrayOfTables, // recArrayOfTables
-		itsKey,           // recEqual
-	}
-	stateTable = []receptor{
-		recEmpty,         // itsWhitespace
-		recEmpty,         // itsComment
-		recEmpty,         // itsNewLine
-		recTable,         // itsTableName
-		recArrayOfTables, // itsArrayOfTables
-		recEqual,         // itsKey
-	}
-
-	tokensArrayOfTables = []tokenFn{
-		itsWhitespace, // recArrayOfTables
-		itsComment,    // recArrayOfTables
-		itsNewLine,    // recEmpty
-		itsTableName,  // recEmptyTable
-		itsKey,        // recEqual
-	}
-	stateArrayOfTables = []receptor{
-		recArrayOfTables, // itsWhitespace
-		recArrayOfTables, // itsComment
-		recEmpty,         // itsNewLine
-		recEmptyTable,    // itsTableName
-		recEqual,         // itsKey
-	}
-
-	tokensValues = []tokenFn{
-		itsWhitespace,     // recValues
-		itsArrayLeftBrack, // recArrayLeftBrack
-		itsString,         // recEmpty
-		itsBoolean,        // recEmpty
-		itsInteger,        // recEmpty
-		itsFloat,          // recEmpty
-		itsDatetime,       // recEmpty
-	}
-	stateValues = []receptor{
-		recValues,         // itsWhitespace
-		recArrayLeftBrack, // itsArrayLeftBrack
-		recEmpty,          // itsString
-		recEmpty,          // itsBoolean
-		recEmpty,          // itsInteger
-		recEmpty,          // itsFloat
-		recEmpty,          // itsDatetime
-		recNotMatch(lameValue),
-	}
-
-	tokensArray = []tokenFn{
-		itsWhitespace,      // recArray
-		itsNewLine,         // recArray
-		itsComment,         // recArray
-		itsComma,           // recArray
-		itsString,          // recStringArray
-		itsBoolean,         // recBooleanArray
-		itsInteger,         // recIntegerArray
-		itsFloat,           // recFloatArray
-		itsDatetime,        // recDatetimeArray
-		itsArrayLeftBrack,  // recArrayLeftBrack
-		itsArrayRightBrack, // recArrayRightBrack
-	}
-	stateArray = []receptor{
-		recArray,           // itsWhitespace
-		recArray,           // itsNewLine
-		recArray,           // itsComment
-		recArray,           // itsComma
-		recStringArray,     // itsString
-		recBooleanArray,    // itsBoolean
-		recIntegerArray,    // itsInteger
-		recFloatArray,      // itsFloat
-		recDatetimeArray,   // itsDatetime
-		recArrayLeftBrack,  // itsArrayLeftBrack
-		recArrayRightBrack, // itsArrayRightBrack
-		recNotMatch(lameArray),
-	}
-
-	tokensStringArray = []tokenFn{
-		itsWhitespace,      // recStringArray
-		itsNewLine,         // recStringArray
-		itsComment,         // recStringArray
-		itsComma,           // recStringArray
-		itsArrayRightBrack, // recArrayRightBrack
-		itsString,          // recStringArray
-	}
-	stateStringArray = []receptor{
-		recStringArray,     // itsWhitespace
-		recStringArray,     // itsNewLine
-		recStringArray,     // itsComment
-		recStringArray,     // itsComma
-		recArrayRightBrack, // itsArrayRightBrack
-		recStringArray,     // itsString
-		recNotMatch(lameArray),
-	}
-
-	tokensBooleanArray = []tokenFn{
-		itsWhitespace,      // recBooleanArray
-		itsNewLine,         // recBooleanArray
-		itsComment,         // recBooleanArray
-		itsComma,           // recBooleanArray
-		itsArrayRightBrack, // recArrayRightBrack
-		itsBoolean,         // recBooleanArray
-	}
-	stateBooleanArray = []receptor{
-		recBooleanArray,    // itsWhitespace
-		recBooleanArray,    // itsNewLine
-		recBooleanArray,    // itsComment
-		recBooleanArray,    // itsComma
-		recArrayRightBrack, // itsArrayRightBrack
-		recBooleanArray,    // itsBoolean
-		recNotMatch(lameArray),
-	}
-
-	tokensIntegerArray = []tokenFn{
-		itsWhitespace,      // recIntegerArray
-		itsNewLine,         // recIntegerArray
-		itsComment,         // recIntegerArray
-		itsComma,           // recIntegerArray
-		itsArrayRightBrack, // recArrayRightBrack
-		itsInteger,         // recIntegerArray
-	}
-	stateIntegerArray = []receptor{
-		recIntegerArray,    // itsWhitespace
-		recIntegerArray,    // itsNewLine
-		recIntegerArray,    // itsComment
-		recIntegerArray,    // itsComma
-		recArrayRightBrack, // itsArrayRightBrack
-		recIntegerArray,    // itsInteger
-		recNotMatch(lameArray),
-	}
-
-	tokensFloatArray = []tokenFn{
-		itsWhitespace,      // recFloatArray
-		itsNewLine,         // recFloatArray
-		itsComment,         // recFloatArray
-		itsComma,           // recFloatArray
-		itsArrayRightBrack, // recArrayRightBrack
-		itsFloat,           // recFloatArray
-	}
-	stateFloatArray = []receptor{
-		recFloatArray,      // itsWhitespace
-		recFloatArray,      // itsNewLine
-		recFloatArray,      // itsComment
-		recFloatArray,      // itsComma
-		recArrayRightBrack, // itsArrayRightBrack
-		recFloatArray,      // itsFloat
-	}
-
-	tokensDatetimeArray = []tokenFn{
-		itsWhitespace,      // recDatetimeArray
-		itsNewLine,         // recDatetimeArray
-		itsComment,         // recDatetimeArray
-		itsComma,           // recDatetimeArray
-		itsArrayRightBrack, // recArrayRightBrack
-		itsDatetime,        // recDatetimeArray
-	}
-	stateDatetimeArray = []receptor{
-		recDatetimeArray,   // itsWhitespace
-		recDatetimeArray,   // itsNewLine
-		recDatetimeArray,   // itsComment
-		recDatetimeArray,   // itsComma
-		recArrayRightBrack, // itsArrayRightBrack
-		recDatetimeArray,   // itsDatetime
-	}
-
-}
-func rec(fns []tokenFn, rs []receptor, p parser) receptor {
-	var (
-		st    Status
-		flag  Token // flag 是 uint 和 Token 复用
-		maybe int
-		r     rune
-	)
-	flags := make([]Token, len(fns))
-	skips := make([]bool, len(fns))
-	for {
-
-		if p.IsSkip() {
-			r = p.Rune()
-		} else {
-			r = p.Next()
-		}
-
-		if r == RuneError {
-			p.Invalid(tokenRuneError)
-			return nil
-		}
-		for i, skip := range skips {
-			if skip {
-				continue
-			}
-			st, flag = fns[i](r, flags[i], maybe != 0)
-			switch st {
-			case SYes, SYesSkip:
-				if st == SYesSkip {
-					p.Skip()
-				}
-				if p.Token(flag) != nil {
-					return nil
-				}
-
-				return rs[i]
-
-			case SNot:
-				if flags[i] != 0 {
-					maybe--
-				}
-				skips[i] = true
-
-			case SInvalid:
-				if flags[i] != 0 {
-					maybe--
-				}
-				p.Invalid(Token(flag))
-				return nil
-
-			case SMaybe:
-				if flags[i] == 0 {
-					maybe++
-				}
-				flags[i] = flag
-			}
-		}
-		if 0 == maybe {
-			break
-		}
-		if r == EOF {
-			if len(rs) > len(fns) {
-				return rs[len(fns)]
-			}
-			p.Token(tokenEOF)
-			return nil
-		}
-	}
-	if len(rs) > len(fns) {
-		return rs[len(fns)]
-	}
-	return nil
-}
-func recUnexpected(token Token) receptor {
-	return func(p parser) receptor {
-		p.Unexpected(token)
-		return nil
-	}
-}
-func recNotMatch(token Token) receptor {
-	return func(p parser) receptor {
-		p.NotMatch(token)
-		return nil
-	}
-}
-
-func recArrayLeftBrack(p parser) receptor {
-	deep := p.ArrayDimensions(1)
-	if deep <= 2 {
-		return rec(tokensArray, stateArray, p)
-	}
-	p.Unexpected(tokenArrayLeftBrack)
-	return nil
-}
-func recArrayRightBrack(p parser) receptor {
-	deep := p.ArrayDimensions(-1)
-	if deep < 0 {
-		p.Unexpected(tokenArrayRightBrack)
-		return nil
-	}
-	if deep == 0 {
-		return rec(tokensEmpty, stateEmpty, p)
-	}
-	return rec(tokensArray, stateArray, p)
-}
-
-func recEmpty(p parser) receptor {
-	return rec(tokensEmpty, stateEmpty, p)
-}
-
-func recEqual(p parser) receptor {
-	return rec(tokensEqual, stateEqual, p)
-}
-
-func recTable(p parser) receptor {
-	return rec(tokensTable, stateTable, p)
-}
-
-func recArrayOfTables(p parser) receptor {
-	return rec(tokensArrayOfTables, stateArrayOfTables, p)
-}
-
-// empty table is special
-func recEmptyTable(p parser) receptor {
-	return nil
-}
-
-func recValues(p parser) receptor {
-	return rec(tokensValues, stateValues, p)
-}
-
-func recArray(p parser) receptor { // LIFO Stack
-	return rec(tokensArray, stateArray, p)
-}
-func recStringArray(p parser) receptor {
-	return rec(tokensStringArray, stateStringArray, p)
-}
-func recBooleanArray(p parser) receptor {
-	return rec(tokensBooleanArray, stateBooleanArray, p)
-}
-func recIntegerArray(p parser) receptor {
-	return rec(tokensIntegerArray, stateIntegerArray, p)
-}
-func recFloatArray(p parser) receptor {
-	return rec(tokensFloatArray, stateFloatArray, p)
-}
-func recDatetimeArray(p parser) receptor {
-	return rec(tokensDatetimeArray, stateDatetimeArray, p)
-}
 
 // tokens
-func itsWhitespace(r rune, flag Token, maybe bool) (Status, Token) {
+func itsWhitespace(r rune, flag int, maybe bool) (Status, Token) {
 	if maybe && flag == 0 {
 		return SNot, tokenWhitespace
 	}
-
 	switch flag {
 	case 0:
 		if isWhitespace(r) {
@@ -571,11 +214,11 @@ func itsWhitespace(r rune, flag Token, maybe bool) (Status, Token) {
 		if isWhitespace(r) {
 			return SMaybe, 1
 		}
-		return SYesSkip, tokenWhitespace
+		return SYesKeep, tokenWhitespace
 	}
 	return SNot, tokenWhitespace
 }
-func itsComment(r rune, flag Token, maybe bool) (Status, Token) {
+func itsComment(r rune, flag int, maybe bool) (Status, Token) {
 	if maybe && flag == 0 {
 		return SNot, tokenComment
 	}
@@ -590,13 +233,13 @@ func itsComment(r rune, flag Token, maybe bool) (Status, Token) {
 			return SYes, tokenComment
 		}
 		if isNewLine(r) {
-			return SYesSkip, tokenComment
+			return SYesKeep, tokenComment
 		}
 		return SMaybe, 1
 	}
 	return SNot, tokenComment
 }
-func itsString(r rune, flag Token, maybe bool) (Status, Token) {
+func itsString(r rune, flag int, maybe bool) (Status, Token) {
 	if maybe && flag == 0 {
 		return SNot, tokenString
 	}
@@ -604,10 +247,10 @@ func itsString(r rune, flag Token, maybe bool) (Status, Token) {
 	switch flag {
 	case 0:
 		if r == '"' {
-			return SMaybe, 1
+			return SMaybe, 2
 		}
 		return SNot, tokenString
-	case 1:
+	case 1: // skip
 		if !isNewLine(r) {
 			return SMaybe, 2
 		}
@@ -626,7 +269,7 @@ func itsString(r rune, flag Token, maybe bool) (Status, Token) {
 }
 
 // 要求在 itsFlaot 的前面
-func itsInteger(r rune, flag Token, maybe bool) (Status, Token) {
+func itsInteger(r rune, flag int, maybe bool) (Status, Token) {
 	if maybe && flag == 0 {
 		return SNot, tokenInteger
 	}
@@ -648,13 +291,14 @@ func itsInteger(r rune, flag Token, maybe bool) (Status, Token) {
 			return SMaybe, 2
 		}
 		if isSuffixOfValue(r) {
-			return SYesSkip, tokenInteger
+			return SYesKeep, tokenInteger
 		}
 	}
 	return SNot, tokenInteger
 }
 
-func itsFloat(r rune, flag Token, maybe bool) (Status, Token) {
+func itsFloat(r rune, flag int, maybe bool) (Status, Token) {
+
 	// 还是有 bug ??? 注释中可能有这些值
 	switch flag {
 	case 0:
@@ -685,13 +329,13 @@ func itsFloat(r rune, flag Token, maybe bool) (Status, Token) {
 			return SMaybe, 4
 		}
 		if isSuffixOfValue(r) {
-			return SYesSkip, tokenFloat
+			return SYesKeep, tokenFloat
 		}
 	}
 	return SNot, tokenFloat
 }
 
-func itsBoolean(r rune, flag Token, maybe bool) (Status, Token) {
+func itsBoolean(r rune, flag int, maybe bool) (Status, Token) {
 	const layout = "truefalse"
 	switch flag {
 	case 0:
@@ -706,33 +350,33 @@ func itsBoolean(r rune, flag Token, maybe bool) (Status, Token) {
 		}
 	case 1, 2, 3, 5, 6, 7, 8:
 		if rune(layout[flag]) == r {
-			return SMaybe, flag + 1
+			return SMaybe, Token(flag + 1)
 		}
 	case 4, 9:
 		if isSuffixOfValue(r) {
-			return SYesSkip, tokenBoolean
+			return SYesKeep, tokenBoolean
 		}
 	}
 	return SNot, tokenBoolean
 }
-func itsDatetime(r rune, flag Token, maybe bool) (Status, Token) {
+func itsDatetime(r rune, flag int, maybe bool) (Status, Token) {
 	const layout = "0000-00-00T00:00:00Z"
-	if flag < 20 {
+	if flag >= 0 && flag < 20 {
 		if layout[flag] == '0' && is09(r) || r == rune(layout[flag]) {
-			return SMaybe, flag + 1
+			return SMaybe, Token(flag + 1)
 		}
 		if flag <= 4 {
 			return SNot, tokenDatetime
 		}
 	}
 	if flag == 20 && isSuffixOfValue(r) {
-		return SYesSkip, tokenDatetime
+		return SYesKeep, tokenDatetime
 	}
 	return SInvalid, tokenDatetime
 }
 
 // [ASCII] http://en.wikipedia.org/wiki/ASCII#ASCII_printable_characters
-func itsTableName(r rune, flag Token, maybe bool) (Status, Token) {
+func itsTableName(r rune, flag int, maybe bool) (Status, Token) {
 	switch flag {
 	case 0:
 		if !maybe && r == '[' {
@@ -758,11 +402,11 @@ func itsTableName(r rune, flag Token, maybe bool) (Status, Token) {
 	return SNot, tokenTableName
 }
 
-func itsArrayOfTables(r rune, flag Token, maybe bool) (Status, Token) {
+func itsArrayOfTables(r rune, flag int, maybe bool) (Status, Token) {
 	switch flag {
 	case 0, 1:
 		if r == '[' {
-			return SMaybe, flag + 1
+			return SMaybe, Token(flag + 1)
 		}
 	case 2:
 		if isNewLine(r) || isWhitespace(r) || r == ']' || r == '.' {
@@ -785,14 +429,14 @@ func itsArrayOfTables(r rune, flag Token, maybe bool) (Status, Token) {
 	}
 	return SNot, tokenArrayOfTables
 }
-func itsNewLine(r rune, flag Token, maybe bool) (Status, Token) {
-	if isNewLine(r) {
+func itsNewLine(r rune, flag int, maybe bool) (Status, Token) {
+	if flag == 0 && isNewLine(r) {
 		return SYes, tokenNewLine
 	}
 	return SNot, tokenNewLine
 }
 
-func itsKey(r rune, flag Token, maybe bool) (Status, Token) {
+func itsKey(r rune, flag int, maybe bool) (Status, Token) {
 	if maybe && flag == 0 {
 		return SNot, tokenKey
 	}
@@ -804,13 +448,13 @@ func itsKey(r rune, flag Token, maybe bool) (Status, Token) {
 			return SInvalid, tokenKey
 		}
 		if r == '=' || isWhitespace(r) {
-			return SYesSkip, tokenKey
+			return SYesKeep, tokenKey
 		}
 		return SMaybe, 1
 	}
 	return SNot, tokenKey
 }
-func itsEqual(r rune, flag Token, maybe bool) (Status, Token) {
+func itsEqual(r rune, flag int, maybe bool) (Status, Token) {
 	if maybe && flag == 0 {
 		return SNot, tokenEqual
 	}
@@ -820,24 +464,31 @@ func itsEqual(r rune, flag Token, maybe bool) (Status, Token) {
 	return SNot, tokenEqual
 }
 
-func itsComma(r rune, flag Token, maybe bool) (Status, Token) {
+func itsComma(r rune, flag int, maybe bool) (Status, Token) {
 	if !maybe && r == ',' {
 		return SYes, tokenComma
 	}
 	return SNot, tokenComma
 }
 
-func itsArrayLeftBrack(r rune, flag Token, maybe bool) (Status, Token) {
+func itsArrayLeftBrack(r rune, flag int, maybe bool) (Status, Token) {
 	if !maybe && r == '[' {
 		return SYes, tokenArrayLeftBrack
 	}
 	return SNot, tokenArrayLeftBrack
 }
-func itsArrayRightBrack(r rune, flag Token, maybe bool) (Status, Token) {
+func itsArrayRightBrack(r rune, flag int, maybe bool) (Status, Token) {
 	if !maybe && r == ']' {
 		return SYes, tokenArrayRightBrack
 	}
 	return SNot, tokenArrayRightBrack
+}
+
+func itsEOF(r rune, flag int, maybe bool) (Status, Token) {
+	if r == EOF {
+		return SYes, tokenEOF
+	}
+	return SNot, tokenEOF
 }
 
 func isEOF(r rune) bool {

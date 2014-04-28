@@ -1,12 +1,12 @@
 # 这是一个用 TOML 格式书写的 readme, 用于理解 tom-toml 的实现方法.
 # 开头的这几行注释被命名为多行注释, MultiComments, 保存在 Value struct 中
 
-keyName = "string value" # 这是行尾注释, EolComment, 保存在 Value struct 中
+keyName = "string value" # 这是行尾注释, eolComment, 保存在 Value struct 中
 
 # 对于上面的内容在 tom-toml 中会生成一个 Value, 下面用伪代码进行描述
 # Value {
 # 	MultiComments: "第1行和第2行的内容,包括行首的 # 字符",
-# 	EolComment: "第4行的行尾注释,包括 # 字符",
+# 	eolComment: "第4行的行尾注释,包括 # 字符",
 # 	kind: String,
 # 	v: interface{}{"string value"},
 # }
@@ -14,7 +14,7 @@ keyName = "string value" # 这是行尾注释, EolComment, 保存在 Value struc
 # 但它的目是为格式化输出做准备的, 不是用来保存最原始的 keyName.
 # 因为 Toml 的定义是 map[string]*Item, 实际操作中使用者可能会:
 # 	delete(m, "keyName")
-# 	m["kenName"] = MakeItem
+# 	m["kenName"] = GenItem
 # 也就是说 keyName 是作为 key 保存在 map 中.
 # 因此使用者需要理解 tom-toml 对 key/value 的管理方式.
 # 另外, MultiComments 总是附加于紧随其后的 TOML 定义
@@ -34,36 +34,36 @@ keyName = "string value" # 这是行尾注释, EolComment, 保存在 Value struc
 # 	"keyName": &Item{..这里省略, 见前面的描述..},
 # 	"tableName": &Item{
 # 		MultiComments: "第6至20行的内容,包括行首的 # 字符",
-# 		EolComment: "第22行的行尾注释,包括 # 字符",
+# 		eolComment: "第22行的行尾注释,包括 # 字符",
 # 		kind: Table,
 # 		v: interface{}{nil}, // 注意这里
 # 	},
 # 	"tableName.Int": &Item{
 # 		MultiComments: "",
-# 		EolComment: "",
+# 		eolComment: "",
 # 		kind: Interger,
 # 		v: interface{}{123456789},
 # 	},
 # 	"tableName.Float": &Item{
 # 		MultiComments: "",
-# 		EolComment: "",
+# 		eolComment: "",
 # 		kind: Float,
 # 		v: interface{}{0.12},
 # 	},
 # 	"tableName.IntArray": &Item{
 # 		MultiComments: "",
-# 		EolComment: "# 行尾注释3", // 注意这里,"# 行尾注释1" 被覆盖掉了
+# 		eolComment: "# 行尾注释3", // 注意这里,"# 行尾注释1" 被覆盖掉了
 # 		kind: IntegerArray,
 # 		v: []*Value{
 # 			&Value{
 # 				MultiComments: "# 多行注释1",
-# 				EolComment: "",
+# 				eolComment: "",
 # 				kind: Integer,
 # 				v: interface{}{1},
 # 			},
 # 			&Value{
 # 				MultiComments: "",
-# 				EolComment: "# 行尾注释2",
+# 				eolComment: "# 行尾注释2",
 # 				kind: Integer,
 # 				v: interface{}{2},
 # 			},

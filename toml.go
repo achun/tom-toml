@@ -12,123 +12,226 @@ import (
 // Toml 是一个 maps, 不是 tree 实现.
 type Toml map[string]Item
 
+// Must be use New() to got Toml, do not use Toml{}.
+// 新建一个 Toml, 必须使用 New() 函数, 不要用 Toml{}.
+// 因为 Toml 的实现需要有一个用于管理的 Id Value, New() 可以做到.
 func New() Toml {
 	tm := Toml{}
-	tm[iD] = MakeItem(0)
+	tm[iD] = GenItem(0)
 	return tm
 }
 
-func (tm Toml) safeId() int {
-	id, ok := tm[iD]
-	if !ok || id.idx == 0 {
-		tm[iD] = MakeItem(0)
-	}
-	return tm[iD].idx
-}
-
 /**
-IdValue 返回用于管理的 ".ID..." 对象副本.
+Id 返回用于管理的 ".ID..." 对象副本.
+如果 Id 不存在, 会自动建立一个, 但这不能保证顺序的可靠性.
 */
-func (tm Toml) IdValue() Value {
-	it, ok := tm[iD]
-	if !ok {
-		return Value{}
+func (tm Toml) Id() Value {
+	id, ok := tm[iD]
+	if !ok || id.idx <= 0 {
+		id = GenItem(0)
+		tm[iD] = id
 	}
-	return *it.Value
+	return *id.Value
 }
 
-// String returns TOML layout string
+// String returns TOML layout string.
 // 格式化输出带缩进的 TOML 格式.
 func (p Toml) String() string {
-	return p.string(-1, 1)
+	return p.string("", 0)
 }
-func (p Toml) string(indent, offset int) (fmt string) {
+
+type kkId struct {
+	kind Kind
+	key  string // it is key of map
+	id   int
+}
+
+type sortIdx []kkId
+
+func (p sortIdx) Len() int      { return len(p) }
+func (p sortIdx) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
+
+func (p sortIdx) Less(i, j int) bool {
+	return p[i].id < p[j].id
+}
+
+type sortKey []kkId
+
+func (p sortKey) Len() int      { return len(p) }
+func (p sortKey) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
+
+func (p sortKey) Less(i, j int) bool {
+	return p[i].key < p[j].key
+}
+
+// prefix for nested TOML
+func (p Toml) string(prefix string, indent int) (fmt string) {
 	l := len(p)
-	if l == 0 {
+	if l == 1 {
 		return
 	}
-	var keys, values []string
-	var keyidx, tabidx []int
-	tables := map[int]string{}
-	lastcomments := ""
-	for key, it := range p {
-		if len(key) == 0 {
-			lastcomments = FixComments(it.MultiComments)
+
+	// outputs end-of-line comments for ArrayOfTables
+	// 输出嵌套TOML的行尾注释, 前一个 Toml 负责输出 ArrayOfTabes 的 Key
+	id := p.Id()
+	if id.idx <= 0 {
+		return
+	}
+
+	if prefix != "" {
+		prefix = prefix + "."
+	}
+
+	indentstr := strings.Repeat("\t", indent)
+
+	// 如果有 prefix 那一定是嵌套的.
+	if prefix == "" && id.eolComment != "" {
+		fmt += " " + id.eolComment + "\n"
+	}
+
+	// 收集整理 kind,Key,idx 信息, 以便有序输出.
+	var tops sortIdx
+	var tabs sortIdx
+	var vals sortKey
+
+	for rawkey, it := range p {
+
+		// ???需要更严格的检查
+		key := strings.TrimSpace(rawkey)
+		if key == "" || key != rawkey || !it.IsValid() {
 			continue
 		}
-		if !it.IsValid() {
-			continue
+
+		ki := kkId{
+			it.kind,
+			key,
+			it.idx,
 		}
+
 		pos := strings.LastIndex(key, ".")
 
-		if pos == -1 && it.kind < TableName {
-			keys = append(keys, key)
-			keyidx = append(keyidx, it.idx)
-			it.key = key
+		if ki.kind < TableName && pos == -1 {
+			// Top level Key-Vlaue
+			tops = append(tops, ki)
+			continue
+		}
+
+		if ki.kind < TableName {
+			// Key-Value
+			vals = append(vals, ki)
 		} else {
-			if it.kind < TableName {
-				values = append(values, key)
-				it.key = key[pos+1:]
-			} else {
-				tables[it.idx] = key
-				tabidx = append(tabidx, it.idx)
-				it.key = key
-			}
+			tabs = append(tabs, ki)
+			// TableName and ArrayOfTables
 		}
 	}
-	sort.Sort(sort.IntSlice(keyidx))
-	sort.Sort(sort.IntSlice(tabidx))
-	sort.Sort(sort.StringSlice(values))
 
-	for i, _ := range keyidx {
-		key := keys[i]
-		it := p[key]
-		fmt += it.string(1, indent)
+	sort.Sort(tops)
+	sort.Sort(tabs)
+	sort.Sort(vals)
+
+	// Top level Key-Vlaue
+	for _, kv := range tops {
+		it := p[kv.key]
+
+		for _, s := range it.multiComments {
+			fmt += indentstr + s + "\n"
+		}
+		fmt += indentstr + kv.key + " = " + it.string(indentstr, 1)
+
+		if it.eolComment != "" {
+			fmt += " " + it.eolComment + "\n"
+		}
+
 	}
 
-	for _, idx := range tabidx {
-		key := tables[idx]
-		it := p[key]
-		if len(fmt) != 0 {
+	if len(tops) != 0 {
+		fmt += "\n"
+	}
+
+	// TableName and ArrayOfTables
+	kvindent := indentstr + "\t"
+	for _, kv := range tabs {
+
+		it := p[kv.key]
+
+		// ArrayOfTables
+		if it.kind == ArrayOfTables {
+			fmt += "\n"
+			nested := kv.key
+			if prefix != "" {
+				nested = prefix + nested
+			}
+			for _, tm := range it.TomlArray() {
+				id := tm.Id()
+
+				for _, s := range id.multiComments {
+					fmt += indentstr + s + "\n"
+				}
+
+				if id.eolComment == "" {
+					fmt += indentstr + "[[" + prefix + kv.key + "]]\n"
+				} else {
+					fmt += indentstr + "[[" + prefix + kv.key + "]] " + id.eolComment + "\n"
+				}
+
+				fmt += tm.string(nested, indent+1)
+			}
+			continue
+		}
+
+		// TableName
+		if fmt != "" {
 			fmt += "\n"
 		}
-		count := indent
-		ks := ""
-		for _, k := range strings.Split(key, ".") {
-			if ks == "" {
-				ks = k
-			} else {
-				ks += "." + k
-			}
-			_, ok := p[ks]
-			if ok {
-				count += offset
-			}
+
+		for _, s := range it.multiComments {
+			fmt += indentstr + s + "\n"
 		}
-		fmt += it.string(1, count)
-		var i, l int
-		var vk string
-		key = key + "."
-		l = len(key)
-		f := false
-		dots := strings.Count(key, ".")
-		for i, vk = range values {
-			if len(vk) < l || vk[:l] != key {
-				if f {
-					break
+
+		if it.eolComment == "" {
+			fmt += indentstr + "[" + prefix + kv.key + "]\n"
+		} else {
+			fmt += indentstr + "[" + prefix + kv.key + "] " + it.eolComment + "\n"
+		}
+
+		// Key-Value
+		tableName := kv.key + "."
+
+		for _, kv := range vals {
+			if !strings.HasPrefix(kv.key, tableName) {
+				continue
+			}
+
+			key := kv.key[len(tableName):]
+
+			// key 有 ".", 那么后续再输出
+			if strings.Index(key, ".") != -1 {
+				continue
+			}
+
+			it := p[kv.key]
+
+			if len(it.multiComments) != 0 {
+				fmt += "\n"
+				for _, s := range it.multiComments {
+					fmt += kvindent + s + "\n"
 				}
-				continue
 			}
-			if strings.Count(vk, ".") != dots {
-				continue
+
+			if it.eolComment == "" {
+				fmt += kvindent + key + " = " + it.string(kvindent, 1) + "\n"
+			} else {
+				fmt += kvindent + key + " = " + it.string(kvindent, 1) + " " +
+					it.eolComment + "\n"
 			}
-			f = true
-			values[i] = ""
-			fmt += p[vk].string(1, count+1)
 		}
 	}
-	if len(lastcomments) != 0 {
-		fmt += "\n" + lastcomments
+
+	// TOML 最后的多行注释
+	if prefix == "" {
+		for _, s := range id.multiComments {
+			fmt += indentstr + s + "\n"
+		}
 	}
 	return
 }
@@ -170,7 +273,7 @@ func (p Toml) Fetch(prefix string) Toml {
 	return nt
 }
 
-// TableNames returns all name of TableName.
+// TableNames returns all name of TableName and ArrayOfTables.
 // 返回所有 TableName 的名字和 ArrayOfTables 的名字.
 func (p Toml) TableNames() (tableNames []string, arrayOfTablesNames []string) {
 	for key, it := range p {
@@ -238,7 +341,7 @@ var (
 func Parse(source []byte) (tm Toml, err error) {
 	p := &parse{Scanner: NewScanner(source)}
 
-	tb := NewBuilder(nil)
+	tb := newBuilder(nil)
 
 	p.Handler(
 		func(token Token, str string) error {
@@ -247,27 +350,28 @@ func Parse(source []byte) (tm Toml, err error) {
 		})
 
 	p.Run()
-	tm = tb.Toml()
+	tm = tb.root.Toml()
+	tm[iD].multiComments = tb.comments
 	return
 }
 
 // 如果 p!=nil 表示是子集模式, tablename 必须有相同的 prefix
-type TomlBuilder struct {
-	tm     Toml
-	root   *TomlBuilder
-	p      *TomlBuilder
-	it     *Item
-	iv     *Value
-	c      string // comment
-	prefix string // with "."
-	token  Token
+type tomlBuilder struct {
+	tm        Toml
+	root      *tomlBuilder
+	p         *tomlBuilder
+	it        *Item
+	iv        *Value
+	comments  aString // comment or comments
+	tableName string  // cache tableName
+	prefix    string  // with "." for nested TOML
+	token     Token   // 有些时候需要知道上一个 token, 比如尾注释
 }
 
-func NewBuilder(root *TomlBuilder) TomlBuilder {
-	tb := TomlBuilder{}
+func newBuilder(root *tomlBuilder) tomlBuilder {
+	tb := tomlBuilder{}
 
-	tb.tm = Toml{}
-	tb.tm.safeId()
+	tb.tm = New()
 
 	if root == nil {
 		tb.root = &tb
@@ -278,13 +382,13 @@ func NewBuilder(root *TomlBuilder) TomlBuilder {
 	return tb
 }
 
-func (t TomlBuilder) Toml() Toml {
+func (t tomlBuilder) Toml() Toml {
 	return t.tm
 }
 
-func (t TomlBuilder) Token(token Token, str string) (TomlBuilder, error) {
+func (t tomlBuilder) Token(token Token, str string) (tomlBuilder, error) {
 	defer func() {
-		// 缓存上一个 token, EolComment 等需要用
+		// 缓存上一个 token, eolComment 等需要用
 		if token == tokenWhitespace {
 			return
 		}
@@ -336,41 +440,55 @@ func (t TomlBuilder) Token(token Token, str string) (TomlBuilder, error) {
 	return t, NotSupported
 }
 
-func (t TomlBuilder) Error(str string) (TomlBuilder, error) {
+func (t tomlBuilder) Error(str string) (tomlBuilder, error) {
 	return t, errors.New(str)
 }
 
-func (t TomlBuilder) RuneError(str string) (TomlBuilder, error) {
+func (t tomlBuilder) RuneError(str string) (tomlBuilder, error) {
 	return t, errors.New(str)
 }
 
-func (t TomlBuilder) EOF(str string) (TomlBuilder, error) {
-	return *t.root, nil
-}
-
-func (t TomlBuilder) Whitespace(str string) (TomlBuilder, error) {
+func (t tomlBuilder) EOF(str string) (tomlBuilder, error) {
 	return t, nil
 }
 
-func (t TomlBuilder) NewLine(str string) (TomlBuilder, error) {
+func (t tomlBuilder) Whitespace(str string) (tomlBuilder, error) {
 	return t, nil
 }
 
-func (t TomlBuilder) Comment(str string) (TomlBuilder, error) {
+func (t tomlBuilder) NewLine(str string) (tomlBuilder, error) {
+	return t, nil
+}
 
-	// EolComment
+func (t tomlBuilder) Comment(str string) (tomlBuilder, error) {
+
+	// eolComment
 	if t.root.token != tokenEOF && t.root.token != tokenNewLine {
 
-		if t.c != "" {
+		if len(t.comments) != 0 {
+			return t, InternalError
+		}
+
+		// [[aot]] #comment, save to iD.eolComment
+		if t.root.token == tokenArrayOfTables {
+			id, ok := t.tm[iD]
+			if !ok || id.eolComment != "" {
+				return t, InternalError
+			}
+			id.Value.eolComment = str
+			return t, nil
+		}
+
+		if t.iv == nil && t.it == nil {
 			return t, InternalError
 		}
 
 		if t.iv == nil {
-			if t.it.EolComment == "" {
-				t.it.EolComment, t.c = str, ""
+			if t.it.eolComment == "" {
+				t.it.eolComment, t.comments = str, aString{}
 			}
-		} else if t.iv.EolComment == "" {
-			t.iv.EolComment, t.c = str, ""
+		} else if t.iv.eolComment == "" {
+			t.iv.eolComment, t.comments = str, aString{}
 		} else {
 			return t, InternalError
 		}
@@ -378,17 +496,12 @@ func (t TomlBuilder) Comment(str string) (TomlBuilder, error) {
 		return t, nil
 	}
 
-	// 给多行注释添加换行
-	l := len(t.c)
-	if l > 0 && t.c[l-1] != '\n' {
-		t.c += "\n" + str
-	} else {
-		t.c = str
-	}
+	// multiComments
+	t.comments = append(t.comments, str)
 	return t, nil
 }
 
-func (t TomlBuilder) String(str string) (TomlBuilder, error) {
+func (t tomlBuilder) String(str string) (tomlBuilder, error) {
 	if t.iv == nil {
 		return t, InternalError
 	}
@@ -404,7 +517,7 @@ func (t TomlBuilder) String(str string) (TomlBuilder, error) {
 	return t, t.iv.Add(str)
 }
 
-func (t TomlBuilder) Integer(str string) (TomlBuilder, error) {
+func (t tomlBuilder) Integer(str string) (tomlBuilder, error) {
 	if t.iv == nil {
 		return t, InternalError
 	}
@@ -418,7 +531,7 @@ func (t TomlBuilder) Integer(str string) (TomlBuilder, error) {
 	}
 	return t, t.iv.Add(v)
 }
-func (t TomlBuilder) Float(str string) (TomlBuilder, error) {
+func (t tomlBuilder) Float(str string) (tomlBuilder, error) {
 	if t.iv == nil {
 		return t, InternalError
 	}
@@ -432,7 +545,7 @@ func (t TomlBuilder) Float(str string) (TomlBuilder, error) {
 	}
 	return t, t.iv.Add(v)
 }
-func (t TomlBuilder) Boolean(str string) (TomlBuilder, error) {
+func (t tomlBuilder) Boolean(str string) (tomlBuilder, error) {
 	if t.iv == nil {
 		return t, InternalError
 	}
@@ -446,7 +559,7 @@ func (t TomlBuilder) Boolean(str string) (TomlBuilder, error) {
 	}
 	return t, t.iv.Add(v)
 }
-func (t TomlBuilder) Datetime(str string) (TomlBuilder, error) {
+func (t tomlBuilder) Datetime(str string) (tomlBuilder, error) {
 	if t.iv == nil {
 		return t, InternalError
 	}
@@ -461,7 +574,7 @@ func (t TomlBuilder) Datetime(str string) (TomlBuilder, error) {
 	return t, t.iv.Add(v)
 }
 
-func (t TomlBuilder) TableName(str string) (TomlBuilder, error) {
+func (t tomlBuilder) TableName(str string) (tomlBuilder, error) {
 	path := str[1 : len(str)-1]
 
 	it, ok := t.tm[path]
@@ -469,8 +582,8 @@ func (t TomlBuilder) TableName(str string) (TomlBuilder, error) {
 		return t, Redeclared
 	}
 
-	comment := t.c
-	t.c = ""
+	comments := t.comments
+	t.comments = aString{}
 
 	if t.prefix != "" {
 		if t.p == nil {
@@ -483,14 +596,18 @@ func (t TomlBuilder) TableName(str string) (TomlBuilder, error) {
 
 		if !strings.HasPrefix(path, t.prefix+".") {
 			t = *t.p
-			t.c = comment
+			t.comments = comments
 			return t.TableName(str)
 		}
+		path = path[len(t.prefix)+1:]
 	}
 
-	it = MakeItem(TableName)
-	it.MultiComments = comment
-	it.key = path
+	// cached tableName for Key
+	t.tableName = path
+
+	it = GenItem(TableName)
+
+	it.multiComments = append(it.multiComments, comments...)
 
 	t.tm[path] = it
 	t.it = &it
@@ -498,14 +615,14 @@ func (t TomlBuilder) TableName(str string) (TomlBuilder, error) {
 	return t, nil
 }
 
-func (t TomlBuilder) Key(str string) (TomlBuilder, error) {
+func (t tomlBuilder) Key(str string) (tomlBuilder, error) {
 
-	it := MakeItem(0)
-	it.key = str
-	it.MultiComments, t.c = t.c, ""
+	it := GenItem(0)
 
-	if t.it != nil {
-		str = t.it.key + "." + str
+	it.multiComments, t.comments = t.comments, aString{}
+
+	if t.tableName != "" {
+		str = t.tableName + "." + str
 	}
 
 	t.tm[str] = it
@@ -514,7 +631,7 @@ func (t TomlBuilder) Key(str string) (TomlBuilder, error) {
 	return t, nil
 }
 
-func (t TomlBuilder) Equal(str string) (TomlBuilder, error) {
+func (t tomlBuilder) Equal(str string) (tomlBuilder, error) {
 
 	if t.root.token != tokenKey {
 		return t, InValidFormat
@@ -526,7 +643,7 @@ func (t TomlBuilder) Equal(str string) (TomlBuilder, error) {
 	return t, nil
 }
 
-func (t TomlBuilder) ArrayOfTables(str string) (nt TomlBuilder, err error) {
+func (t tomlBuilder) ArrayOfTables(str string) (nt tomlBuilder, err error) {
 	path := str[2 : len(str)-2]
 
 	if t.prefix != "" {
@@ -534,31 +651,27 @@ func (t TomlBuilder) ArrayOfTables(str string) (nt TomlBuilder, err error) {
 			return t, InternalError
 		}
 
-		comment := t.c
+		comments := t.comments
 
 		// 增加兄弟 table
 		if t.prefix == path {
 			t = *t.p
-			t.c = comment
+			t.comments = comments
 			return t.ArrayOfTables(str)
 		} else if !strings.HasPrefix(path, t.prefix+".") {
 			// 递归向上
 			t = *t.p
-			t.c = comment
+			t.comments = comments
 			return t.ArrayOfTables(str)
 		}
+		path = path[len(t.prefix)+1:]
 	}
 
-	nt, err = t.nestToml(path)
-	if err != nil {
-		return t, err
-	}
-
-	return nt, err
+	return t.nestToml(path)
 }
 
 // 嵌套 TOML , prefix 就是 [[arrayOftablesName]]
-func (t TomlBuilder) nestToml(prefix string) (TomlBuilder, error) {
+func (t tomlBuilder) nestToml(prefix string) (tomlBuilder, error) {
 
 	it, ok := t.tm[prefix]
 
@@ -567,29 +680,32 @@ func (t TomlBuilder) nestToml(prefix string) (TomlBuilder, error) {
 		return t, Redeclared
 	}
 
-	tb := NewBuilder(t.root)
+	tb := newBuilder(t.root)
 
 	tb.p = &t
-	tb.tm = Toml{}
-	tb.tm.safeId()
+	tb.tm = New()
+
+	id := tb.tm[iD]
+
+	// Comments
+	id.multiComments, t.comments = t.comments, aString{}
 
 	// first [[...]]
 	if !ok {
-		it = MakeItem(ArrayOfTables)
-		it.v = Tables{tb.tm}
+		it = GenItem(ArrayOfTables)
+		it.v = TomlArray{tb.tm}
 		t.tm[prefix] = it
+
 	} else {
 		// again [[...]]
-		ts := it.v.(Tables)
+		ts := it.v.(TomlArray)
 		it.v = append(ts, tb.tm)
 	}
-	it.MultiComments, t.c = t.c, ""
-
 	tb.prefix = prefix
 	return tb, nil
 }
 
-func (t TomlBuilder) ArrayLeftBrack(str string) (TomlBuilder, error) {
+func (t tomlBuilder) ArrayLeftBrack(str string) (tomlBuilder, error) {
 	if t.iv == nil {
 		return t, NotSupported
 	}
@@ -609,7 +725,7 @@ func (t TomlBuilder) ArrayLeftBrack(str string) (TomlBuilder, error) {
 	return nt, nil
 }
 
-func (t TomlBuilder) ArrayRightBrack(str string) (TomlBuilder, error) {
+func (t tomlBuilder) ArrayRightBrack(str string) (tomlBuilder, error) {
 
 	if t.iv == nil || t.iv.kind < StringArray || t.iv.kind > Array {
 		return t, InValidFormat
@@ -621,7 +737,7 @@ func (t TomlBuilder) ArrayRightBrack(str string) (TomlBuilder, error) {
 	return *t.p, nil
 }
 
-func (t TomlBuilder) Comma(str string) (TomlBuilder, error) {
+func (t tomlBuilder) Comma(str string) (tomlBuilder, error) {
 	if t.iv == nil || t.iv.kind < StringArray || t.iv.kind > Array {
 		return t, InValidFormat
 	}
