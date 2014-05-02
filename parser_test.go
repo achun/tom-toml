@@ -17,25 +17,8 @@ func assertBadParse(wt want.Want, src string, msg string) {
 	if msg == "" {
 		nwt.Error(p.err, "TOML want an error: ", src)
 	} else {
-		nwt.Equal(p.err.Error(), msg, func() string {
-			l, c, s := p.LastLine()
-			return want.String("Line ", l, ", Column ", c, "\n"+s, "\n"+arrowCol(s, c))
-		})
+		nwt.Equal(p.err.Error(), msg)
 	}
-}
-func arrowCol(line string, col int) string {
-	ret := ""
-	for i, r := range line {
-		if i+1 == col {
-			break
-		}
-		if r < 256 {
-			ret += " "
-		} else {
-			ret += "  "
-		}
-	}
-	return ret + "^"
 }
 
 // outs =["token","value"]
@@ -48,22 +31,19 @@ func assertParse(wt want.Want, str string, outs ...string) {
 	if l > 0 {
 		last = outs[l-1]
 	}
+
 	p.Handler(func(token Token, str string) (err error) {
 		if tokenWhitespace == token || token == tokenNewLine || token == tokenEOF {
 			return
 		}
 
 		if i == l {
-			wt.False(true, "outputs more: ", i, " > ", l-1, "\nlast: ", last, "\ngot token: ", token.String()+"\nFetch: "+str, func() string {
-				l, c, s := p.LastLine()
-				return want.String("Line ", l, ", Column ", c, "\n"+s, "\n"+arrowCol(s, c))
-			})
-
+			wt.False(true, "outputs more: ", i, " > ", l-1, "\nlast: ", last, "\ngot token: ", token.String()+"\nFetch: "+str)
 		}
 
-		wt.Equal(token.String()+" "+str, outs[i], i, func() string {
+		wt.Equal(token.String()+" "+str, outs[i], func() string {
 			l, c, s := p.LastLine()
-			return want.String("Line ", l, ", Column ", c, "\n"+s, "\n"+arrowCol(s, c))
+			return want.String("Line ", l, ", Column ", c, "\n", s)
 		})
 
 		i++
@@ -72,11 +52,7 @@ func assertParse(wt want.Want, str string, outs ...string) {
 	stagePlay(p, openStage())
 	wt = wt
 	wt.Skip = 3
-	wt.Nil(p.err, func() string {
-		l, c, s := p.LastLine()
-		return want.String("Line ", l, ", Column ", c, "\n"+s, "\n"+arrowCol(s, c))
-	})
-
+	wt.Nil(p.err)
 	if l > 0 {
 		j := i
 		if j >= l {
@@ -85,11 +61,44 @@ func assertParse(wt want.Want, str string, outs ...string) {
 		wt.Equal(i, l, "loss: ", outs[j])
 	}
 }
-
-func TestScanner(t *testing.T) {
-	if skipTest {
-		return
+func assertParseBug(wt want.Want, str string, outs ...string) {
+	scan := NewScanner([]byte(str))
+	p := &parse{Scanner: scan, testMode: true}
+	i := 0
+	l := len(outs)
+	last := ""
+	if l > 0 {
+		last = outs[l-1]
 	}
+
+	p.Handler(func(token Token, str string) (err error) {
+		if tokenWhitespace == token || token == tokenNewLine || token == tokenEOF {
+			return
+		}
+		// print for debug
+		println(token.String() + " " + str)
+
+		if i == l {
+			wt.False(true, "outputs more: ", i, " > ", l-1, "\nlast: ", last, "\ngot token: ", token.String()+"\nFetch: "+str)
+		}
+
+		wt.Equal(token.String()+" "+str, outs[i])
+		i++
+		return
+	})
+	stagePlay(p, openStage())
+	wt = wt
+	wt.Skip = 3
+	wt.Nil(p.err)
+	if l > 0 {
+		j := i
+		if j >= l {
+			j = l - 1
+		}
+		wt.Equal(i, l, "loss: ", outs[j])
+	}
+}
+func TestScanner(t *testing.T) {
 	wt := want.T(t)
 	s := NewScanner([]byte("0123456789"))
 	wt.Equal(s.Fetch(true), "0")
@@ -110,12 +119,9 @@ func TestScanner(t *testing.T) {
 
 func TestEmpty(tt *testing.T) {
 	t := want.Want{tt, 7}
-	if skipTest {
-		return
-	}
 	assertParse(t, ``)
 	assertParse(t, ` `)
-	assertParse(t, `	`)
+	assertParse(t, ` `)
 	assertParse(t, `
 	   	
 
@@ -130,11 +136,15 @@ func TestToken(tt *testing.T) {
 		i  = `Integer`
 		ca = `Comma ,`
 	)
-	t := want.Want{tt, 7}
-
 	if skipTest {
 		return
 	}
+	t := want.Want{tt, 7}
+	assertParse(t, `ia = [[1],[2,3],["A","B"]]`, `Key ia`, eq, al,
+		al, `Integer 1`, ar, ca,
+		al, `Integer 2`, ca, `Integer 3`, ar, ca,
+		al, `String "A"`, ca, `String "B"`, ar,
+		ar)
 	assertParse(t, `string = "is string \n newline"`, `Key string`, eq, `String "is string \n newline"`)
 	assertParse(t, `#`, `Comment #`)
 	assertParse(t, `#
@@ -148,43 +158,23 @@ func TestToken(tt *testing.T) {
 	assertParse(t, `key = []`, `Key key`, eq, al, ar)
 	assertParse(t, `key = [1]`, `Key key`, eq, al, `Integer 1`, ar)
 	assertParse(t, `ia = [1 , 2]`, `Key ia`, eq, al, `Integer 1`, ca, `Integer 2`, ar)
-	assertParse(t, `ia = [[1],[2,3],["A","B"]]`, `Key ia`, eq,
-		al,
-		al, `Integer 1`, ar, ca,
-		al, `Integer 2`, ca, `Integer 3`, ar, ca,
-		al, `String "A"`, ca, `String "B"`, ar,
-		ar)
-	assertParse(t, `ia = [[[ 0,1 ],["A","B"],[["D"],["E"]]],[ 2,3]]`, `Key ia`, eq,
-		al,
-
-		al,
-		al, `Integer 0`, ca, `Integer 1`, ar, ca,
-		al, `String "A"`, ca, `String "B"`, ar, ca,
-		al,
-		al, `String "D"`, ar, ca,
-		al, `String "E"`, ar, ar,
-		ar, ca,
-
-		al, `Integer 2`, ca, `Integer 3`, ar,
-		ar)
-
 	assertParse(t, `str = ""`, `Key str`, eq, `String ""`)
 
-	const noEqual = `roles does not match one of stageEqual`
+	const noEqual = `no one can match for Whitespace Equal`
 	assertBadParse(t, `key`, "invalid Key")
 	assertBadParse(t, `key 1`, noEqual)
 	assertBadParse(t, `ke y = name`, noEqual)
 	assertBadParse(t, `key # comment`, noEqual)
 
-	const noValues = `roles does not match one of stageValues`
+	const noValues = `no one can match for Whitespace ArrayLeftBrack String Boolean Integer Float Datetime`
 	assertBadParse(t, `key = name`, noValues)
 	assertBadParse(t, `key = # comment`, noValues)
 
-	const noInteger = `roles does not match one of stageIntegerArray`
+	const noInteger = `no one can match for Whitespace NewLine Comment ArrayRightBrack Integer` // Comma
 	assertBadParse(t, `key = [1,ent]`, noInteger)
 	assertBadParse(t, `key = [1,"ent"]`, noInteger)
 
-	const noArrayVlaues = `roles does not match one of stageArray`
+	const noArrayVlaues = `no one can match for Whitespace Comment NewLine ArrayLeftBrack ArrayRightBrack String Boolean Integer Float Datetime`
 	assertBadParse(t, `key = [`, noArrayVlaues)
 
 	assertBadParse(t, `[]`, "invalid TableName")

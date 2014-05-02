@@ -12,7 +12,7 @@ func init() {
 
 func TestTomlFile(t *testing.T) {
 	if skipTest {
-		return
+		//return
 	}
 	wt := want.T(t)
 	tm, err := LoadFile("tests/example.toml")
