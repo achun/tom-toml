@@ -11,17 +11,19 @@ type Status int
 const (
 	SNot Status = iota
 	SInvalid
+	SUnexpected
 	SMaybe
 	SYes
 	SYesKeep // SYes 并且多读了一个字符, 保持当前的字符给后续解析
 )
 
 var statusName = [...]string{
-	"SNot",
-	"SInvalid",
-	"SMaybe",
-	"SYes",
-	"SYesKeep",
+	"Not",
+	"Invalid",
+	"Unexpected",
+	"Maybe",
+	"Yes",
+	"YesKeep",
 }
 
 func (t Status) String() string {
@@ -54,8 +56,7 @@ const (
 	tokenComma
 	tokenError
 	tokenRuneError
-	lameValue // for lame
-	lameArray
+	tokenNothing
 )
 
 func (t Token) String() string {
@@ -85,8 +86,7 @@ var tokensName = [...]string{
 	"Comma",
 	"Error",
 	"EncodingError",
-	"Value",
-	"Array",
+	"Nothing",
 }
 
 type TokenHandler func(Token, string) error
@@ -99,6 +99,7 @@ type parser interface {
 	Keep()
 	IsTestMode() bool
 
+	Err(msg string)
 	Token(token Token) error
 	Invalid(token Token)
 	NotMatch(token ...Token)
@@ -123,7 +124,7 @@ func (p *parse) IsTestMode() bool {
 	return p.testMode
 }
 
-func (p *parse) Rune() rune {
+func (p *parse) Next() rune {
 	if p.next {
 		return p.Scanner.Next()
 	}
@@ -131,12 +132,13 @@ func (p *parse) Rune() rune {
 	return p.Scanner.Rune()
 }
 
-func (p *parse) Next() rune {
-	return p.Rune()
-}
-
 func (p *parse) Keep() {
 	p.next = false
+}
+
+func (p *parse) Err(msg string) {
+	p.err = errors.New(msg)
+	p.Token(tokenError)
 }
 
 func (p *parse) NotMatch(token ...Token) {
@@ -205,15 +207,10 @@ func itsWhitespace(r rune, flag int, maybe bool) (Status, Token) {
 	if maybe && flag == 0 {
 		return SNot, tokenWhitespace
 	}
-	switch flag {
-	case 0:
-		if isWhitespace(r) {
-			return SMaybe, 1
-		}
-	case 1:
-		if isWhitespace(r) {
-			return SMaybe, 1
-		}
+	if isWhitespace(r) {
+		return SMaybe, 1
+	}
+	if flag == 1 {
 		return SYesKeep, tokenWhitespace
 	}
 	return SNot, tokenWhitespace
@@ -488,6 +485,10 @@ func itsEOF(r rune, flag int, maybe bool) (Status, Token) {
 	if r == EOF {
 		return SYes, tokenEOF
 	}
+	return SNot, tokenEOF
+}
+
+func itsSNot(r rune, flag int, maybe bool) (Status, Token) {
 	return SNot, tokenEOF
 }
 
